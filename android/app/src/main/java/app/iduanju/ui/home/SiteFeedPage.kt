@@ -79,15 +79,21 @@ fun FeedGrid(key: String, cats: List<Pair<String, String>>, load: (String, Int) 
             val cat = cats.getOrNull(sel)?.first ?: ""
             val p = withContext(Dispatchers.IO) { load(cat, page) }
             val seen = items.map { it.seriesId }.toHashSet()
-            items.addAll(p.items.filter { seen.add(it.seriesId) })
-            hasMore = p.hasMore; page += 1; error = null; verify = null
+            val fresh = p.items.filter { seen.add(it.seriesId) }
+            items.addAll(fresh)
+            // TV fix: a page with zero new items means the source is repeating itself — stop,
+            // otherwise the near-end effect below re-fires forever and the grid flickers.
+            hasMore = p.hasMore && fresh.isNotEmpty(); page += 1; error = null; verify = null
         } catch (e: CancellationException) { throw e }
         catch (e: app.iduanju.core.util.VerificationRequiredException) { verify = e; error = "需要验证" }
         catch (e: Exception) { error = e.message ?: "加载失败" }
         finally { loading = false }
     }
     LaunchedEffect(key, sel) { more() }
-    val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= grid.layoutInfo.totalItemsCount - 6 } }
+    // TV fix: "near end" only counts when the content actually overflows the viewport;
+    // on a big TV screen a short list is fully visible, which used to read as permanently
+    // near-end and drove an endless load loop (visible as constant flicker).
+    val nearEnd by remember { derivedStateOf { val info = grid.layoutInfo; info.totalItemsCount > info.visibleItemsInfo.size && (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 6 } }
     LaunchedEffect(nearEnd, items.size) { if (nearEnd && items.isNotEmpty()) more() }
 
     LazyVerticalGrid(GridCells.Fixed(app.iduanju.ui.components.LocalLayoutMetrics.current.posterCols), state = grid, modifier = Modifier.fillMaxSize(),
