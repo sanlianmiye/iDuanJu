@@ -667,7 +667,13 @@ fun NovelScreen(onBack: () -> Unit, embedded: Boolean = false, onFullScreenChang
                                 MiniButton("重试加载榜单") { if (!busy) search(false) }
                             }
                         } else {
-                            LaunchedEffect(page, category?.id, busy) { if (!busy) search(false) }
+                            // TV fix: only auto-load when the list actually overflows the
+                            // viewport AND the user has scrolled near the end. On a big TV
+                            // screen a short ranking fits whole, so the footer is always
+                            // composed — the unconditional effect used to chain-load every
+                            // page back to back, seen as constant flicker.
+                            val nearEnd by remember { derivedStateOf { val info = rankList.layoutInfo; info.totalItemsCount > info.visibleItemsInfo.size && (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 3 } }
+                            LaunchedEffect(nearEnd, page, category?.id, busy) { if (nearEnd && !busy) search(false) }
                         }
                     }
                 }
