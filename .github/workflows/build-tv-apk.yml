@@ -1,0 +1,52 @@
+name: Build TV APK
+
+# Builds the TV-adapted Android release of this fork and stores it as a run artifact.
+# Signing uses the fork's own keystore (secrets IDJ_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD),
+# wired into the project's "distribution" signing config via ANDROID_KEYSTORE_PATH.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/build-tv-apk.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing keystore
+        env:
+          IDJ_KEYSTORE_B64: ${{ secrets.IDJ_KEYSTORE_B64 }}
+        run: |
+          echo "$IDJ_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/idj.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/idj.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: iduanju-tv-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
