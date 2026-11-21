@@ -42,6 +42,7 @@ import app.iduanju.core.hongguo.HGRankSub
 import app.iduanju.core.hongguo.HGSeries
 import app.iduanju.ui.home.HomeFmt
 import app.iduanju.ui.home.HomePosterCard
+import app.iduanju.ui.components.pressClick
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
@@ -132,8 +133,8 @@ fun SearchScreen(onOpenDetail: (String) -> Unit, initialQuery: String = "") {
                 if (query.isNotEmpty()) Icon(Icons.Filled.Cancel, "清除", tint = c.secondary, modifier = Modifier.size(16.dp).clickable { query = "" })
             }
             Spacer(Modifier.width(12.dp))
-            if (submitted.isNotEmpty()) Text("取消", color = c.text, fontSize = 15.sp, modifier = Modifier.clickable { query = ""; submitted = ""; items.clear() })
-            else Text("搜索", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable { submit() })
+            if (submitted.isNotEmpty()) Text("取消", color = c.text, fontSize = 15.sp, modifier = Modifier.pressClick(label = "取消", ring = RoundedCornerShape(8.dp)) { query = ""; submitted = ""; items.clear() })
+            else Text("搜索", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.pressClick(label = "搜索", ring = RoundedCornerShape(8.dp)) { submit() })
         }
         val grid = rememberLazyGridState()
         if (submitted.isEmpty()) {
@@ -183,7 +184,7 @@ fun SearchScreen(onOpenDetail: (String) -> Unit, initialQuery: String = "") {
             if (sources.size > 1) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 sources.forEach { (id, name) ->
                     val on = id == source
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { if (!on) { source = id; cursor = null; items.clear(); loadMore(true) } }) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.pressClick(0.97f, ring = RoundedCornerShape(12.dp)) { if (!on) { source = id; cursor = null; items.clear(); loadMore(true) } }) {
                         Text(name, color = if (on) c.text else c.secondary, fontSize = if (on) 17.sp else 15.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal)
                         Box(Modifier.padding(top = 3.dp).size(16.dp, 3.dp).clip(RoundedCornerShape(50)).background(if (on) c.accent else Color.Transparent))
                     }
@@ -216,7 +217,7 @@ fun SearchScreen(onOpenDetail: (String) -> Unit, initialQuery: String = "") {
 @Composable
 private fun Chip(t: String, accent: String?, removable: Boolean, onClick: () -> Unit) {
     val c = IdjThemeColors
-    Row(Modifier.clip(RoundedCornerShape(50)).background(c.text.copy(0.09f)).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+    Row(Modifier.clip(RoundedCornerShape(50)).background(c.text.copy(0.09f)).pressClick(label = "", ring = RoundedCornerShape(50), onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text(t, color = c.text, fontSize = 15.sp, maxLines = 1)
         if (accent != null) Text(" ·$accent", color = c.accentWarm, fontSize = 15.sp)
@@ -235,7 +236,7 @@ private fun rankColor(r: Int): Color = when (r) {
 
 @Composable
 private fun TopRankCard(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
-    Box(Modifier.fillMaxWidth().aspectRatio(0.6f).clip(RoundedCornerShape(12.dp)).clickable { onOpen(s.seriesId) }, contentAlignment = Alignment.BottomCenter) {
+    Box(Modifier.fillMaxWidth().aspectRatio(0.6f).clip(RoundedCornerShape(12.dp)).pressClick(0.97f, label = s.title, ring = RoundedCornerShape(12.dp)) { onOpen(s.seriesId) }, contentAlignment = Alignment.BottomCenter) {
         AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         val g = rankGradient(rank)
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 0.6f to g[0], 1f to g[1])))
@@ -250,7 +251,7 @@ private fun TopRankCard(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
 @Composable
 private fun CompactRankRow(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
     val c = IdjThemeColors
-    Row(Modifier.clickable { onOpen(s.seriesId) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(Modifier.pressClick(0.98f, label = s.title, ring = RoundedCornerShape(12.dp)) { onOpen(s.seriesId) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.size(46.dp, 62.dp).clip(RoundedCornerShape(6.dp)).background(c.elevated)) {
             AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             Text("$rank", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black,

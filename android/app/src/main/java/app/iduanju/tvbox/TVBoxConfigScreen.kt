@@ -23,6 +23,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.RoundedCornerShape
+import app.iduanju.ui.components.pressClick
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -126,7 +128,7 @@ fun TVBoxConfigScreen(
                             .clip(CircleShape)
                             .background(c.text.copy(0.07f))
                             .border(0.7.dp, c.text.copy(0.11f), CircleShape)
-                            .clickable(onClick = onBack),
+                            .pressClick(ring = RoundedCornerShape(12.dp), onClick = onBack),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.text, modifier = Modifier.size(18.dp))
@@ -139,7 +141,7 @@ fun TVBoxConfigScreen(
                             color = c.accent,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.clickable(enabled = !busy) {
+                            modifier = Modifier.pressClick(enabled = !busy, ring = RoundedCornerShape(12.dp)) {
                                 runTask {
                                     store.pingAllSites(activeRepo.id) { statusMsg = it }
                                     "测速完成"
@@ -184,7 +186,7 @@ fun TVBoxConfigScreen(
                             .height(34.dp)
                             .clip(RoundedCornerShape(17.dp))
                             .background(c.text)
-                            .clickable(enabled = !busy && urlText.isNotBlank()) {
+                            .pressClick(enabled = !busy && urlText.isNotBlank(), ring = RoundedCornerShape(17.dp)) {
                                 val u = urlText.trim()
                                 runTask {
                                     val repo = store.importFromUrl(u) { statusMsg = it }
@@ -324,7 +326,7 @@ fun TVBoxConfigScreen(
                                     color = c.accent,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.clickable(enabled = !busy) {
+                                    modifier = Modifier.pressClick(enabled = !busy, ring = RoundedCornerShape(12.dp)) {
                                         runTask {
                                             val r = store.refreshRepo(activeRepo.id) { statusMsg = it }
                                             "已更新「${r.name}」：${r.sites.size} 点播站 · ${r.lives.size} 直播源"
@@ -538,7 +540,7 @@ private fun MethodPill(icon: androidx.compose.ui.graphics.vector.ImageVector, la
             .clip(RoundedCornerShape(17.dp))
             .background(c.text.copy(0.065f))
             .border(0.7.dp, c.text.copy(0.08f), RoundedCornerShape(17.dp))
-            .clickable(onClick = onClick),
+            .pressClick(ring = RoundedCornerShape(12.dp), onClick = onClick),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {

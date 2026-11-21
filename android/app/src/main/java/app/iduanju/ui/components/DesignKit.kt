@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -166,12 +167,19 @@ fun DSPage(cool: Boolean = false, glow: Boolean = true, modifier: Modifier = Mod
 @Composable
 fun Hairline(modifier: Modifier = Modifier) = Box(modifier.fillMaxWidth().height(1.dp).background(IdjThemeColors.hairline))
 
-/** Press feedback (spec "按下"): scale 0.96 and 85 % opacity. */
-fun Modifier.pressClick(scale: Float = 0.96f, enabled: Boolean = true, label: String? = null, onClick: () -> Unit): Modifier = composed {
+/**
+ * Press feedback (spec "按下"): scale 0.96 and 85 % opacity.
+ * TV build: the same interaction source also reports DPAD focus — a focused element scales up
+ * slightly and draws an accent ring ([ring] should match the element's own clip shape), so every
+ * pressClick target is remote-navigable with a visible focus state.
+ */
+fun Modifier.pressClick(scale: Float = 0.96f, enabled: Boolean = true, label: String? = null, ring: Shape = RoundedCornerShape(14.dp), onClick: () -> Unit): Modifier = composed {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val s by animateFloatAsState(if (pressed) scale else 1f, DS.press(), label = "press")
+    val focused by src.collectIsFocusedAsState()
+    val s by animateFloatAsState(if (pressed) scale else if (focused) 1.06f else 1f, DS.press(), label = "press")
     this.graphicsLayer { scaleX = s; scaleY = s; alpha = if (pressed) 0.85f else 1f }
+        .then(if (focused) Modifier.border(2.5.dp, IdjThemeColors.accent, ring) else Modifier)
         .clickable(src, null, enabled = enabled, onClick = onClick)
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
 }
@@ -244,7 +252,7 @@ fun ToneChip(title: String, on: Boolean, neutral: Boolean = false, small: Boolea
         .then(if (on && neutral && !c.dark) Modifier.shadow(3.dp, CircleShape, ambientColor = c.shadowThumb, spotColor = c.shadowThumb) else Modifier)
         .clip(CircleShape).background(fill)
         .then(if (on && !neutral) Modifier.border(1.dp, c.accentLine, CircleShape) else Modifier)
-        .pressClick(0.97f, enabled, onClick = onClick)
+        .pressClick(0.97f, enabled, ring = CircleShape, onClick = onClick)
         .height(if (small) 28.dp else 32.dp).padding(horizontal = if (small) 12.dp else 14.dp)
         .semantics { contentDescription = "chip.$title" },
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -288,7 +296,7 @@ fun RoundIconButton(icon: ImageVector, label: String, tone: Tone = Tone.Glass, s
     val bg = when (tone) { Tone.Accent -> c.accentSoft; Tone.Overlay -> Color.Black.copy(0.30f); Tone.Glass -> c.glass }
     val fg = when (tone) { Tone.Accent -> c.accent; Tone.Overlay -> Color.White; Tone.Glass -> c.text }
     val br = when (tone) { Tone.Accent -> Color.Transparent; Tone.Overlay -> Color.White.copy(0.16f); Tone.Glass -> c.hairline }
-    Box(Modifier.size(size).clip(CircleShape).background(bg).border(1.dp, br, CircleShape).pressClick(label = label, onClick = onClick),
+    Box(Modifier.size(size).clip(CircleShape).background(bg).border(1.dp, br, CircleShape).pressClick(label = label, ring = CircleShape, onClick = onClick),
         contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(18.dp), tint = fg) }
 }
 
@@ -300,7 +308,7 @@ fun BackButton(tone: Tone = Tone.Glass, onClick: () -> Unit) =
 @Composable
 fun CapsuleButton(title: String, icon: ImageVector? = null, trailing: ImageVector? = null, onClick: () -> Unit) {
     val c = IdjThemeColors
-    Row(Modifier.height(36.dp).clip(CircleShape).background(c.glass).border(1.dp, c.hairline, CircleShape).pressClick(label = title, onClick = onClick)
+    Row(Modifier.height(36.dp).clip(CircleShape).background(c.glass).border(1.dp, c.hairline, CircleShape).pressClick(label = title, ring = CircleShape, onClick = onClick)
         .padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         if (icon != null) Icon(icon, null, Modifier.size(16.dp), tint = c.secondary)
         Text(title, color = c.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 200.dp))
@@ -317,7 +325,7 @@ fun PillButton(title: String, modifier: Modifier = Modifier, icon: ImageVector? 
     val c = IdjThemeColors
     val bg = when (tone) { PillTone.Accent -> c.accent; PillTone.Ink -> c.text; PillTone.White -> Color.White }
     val fg = when (tone) { PillTone.Accent -> c.onAccent; PillTone.Ink -> c.bg; PillTone.White -> Color(0xFF111317) }
-    Row(modifier.height(height ?: if (small) 32.dp else 48.dp).clip(CircleShape).background(bg).pressClick(0.98f, enabled, title, onClick)
+    Row(modifier.height(height ?: if (small) 32.dp else 48.dp).clip(CircleShape).background(bg).pressClick(0.98f, enabled, title, CircleShape, onClick)
         .padding(horizontal = if (small) 14.dp else 22.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
         if (icon != null) Icon(icon, null, Modifier.size(if (small) 14.dp else 18.dp), tint = fg)
@@ -329,7 +337,7 @@ fun PillButton(title: String, modifier: Modifier = Modifier, icon: ImageVector? 
 @Composable
 fun MiniButton(title: String, onClick: () -> Unit) {
     val c = IdjThemeColors
-    Box(Modifier.height(30.dp).clip(CircleShape).background(c.accentSoft).pressClick(label = title, onClick = onClick).padding(horizontal = 12.dp),
+    Box(Modifier.height(30.dp).clip(CircleShape).background(c.accentSoft).pressClick(label = title, ring = CircleShape, onClick = onClick).padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center) { Text(title, color = c.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
 }
 

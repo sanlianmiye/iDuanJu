@@ -27,6 +27,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.animation.togetherWith
@@ -92,16 +100,23 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
     var autoNext by remember { mutableStateOf(true) }
     var padDrawerOpen by remember { mutableStateOf(true) }
     val activity = ctx as? android.app.Activity
+    // TV build: leanback devices get remote-key transport control and never rotate to portrait.
+    val isTv = remember { (ctx.getSystemService(android.content.Context.UI_MODE_SERVICE) as? android.app.UiModeManager)?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION }
+    val playerFocus = remember { FocusRequester() }
+    val playBtnFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { playerFocus.requestFocus() } }
+
     val metrics = app.iduanju.ui.components.LocalLayoutMetrics.current
     val landscape = metrics.isLandscape
     fun setLandscape(on: Boolean) {
         activity?.requestedOrientation = when {
             on -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            metrics.isTablet -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            metrics.isTablet || isTv -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
     }
-    androidx.activity.compose.BackHandler(enabled = landscape) { setLandscape(false) }
+    androidx.activity.compose.BackHandler(enabled = landscape && !isTv) { setLandscape(false) }
+    androidx.activity.compose.BackHandler(enabled = panel != null) { panel = null }
     LaunchedEffect(landscape) {
         val w = activity?.window ?: return@LaunchedEffect
         val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
@@ -249,7 +264,21 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
     }
     val showPadSplit = metrics.isTablet && landscape && metrics.widthDp >= 840 && isPortraitMedia && detail != null && padDrawerOpen
     Row(Modifier.fillMaxSize().background(Color.Black)) {
-    Box(Modifier.weight(1f).fillMaxHeight().background(Color.Black)) {
+    Box(Modifier.weight(1f).fillMaxHeight().background(Color.Black)
+        .focusRequester(playerFocus)
+        .focusable()
+        .onPreviewKeyEvent { e ->
+            if (e.type != KeyEventType.KeyDown || panel != null || showChrome) false
+            else when (e.key) {
+                Key.DirectionLeft -> { if (!locked) { player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0)); seekHint = "-10s"; showChrome = true }; true }
+                Key.DirectionRight -> { if (!locked) { player.seekTo(player.currentPosition + 10_000); seekHint = "+10s"; showChrome = true }; true }
+                Key.DirectionCenter, Key.Enter -> { if (!locked) { if (player.isPlaying) player.pause() else player.play(); showChrome = true }; true }
+                Key.DirectionUp -> { if (!locked && epIndex > 0) selectEpisode(epIndex - 1); true }
+                Key.DirectionDown -> { val n = detail?.episodes?.size ?: 0; if (!locked && epIndex + 1 < n) selectEpisode(epIndex + 1); true }
+                Key.MediaPlayPause -> { if (player.isPlaying) player.pause() else player.play(); true }
+                else -> false
+            }
+        }) {
         AndroidView(
             factory = {
                 PlayerView(it).apply {
@@ -359,6 +388,7 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
         val pc = IdjDarkColors
         val chromeA by androidx.compose.animation.core.animateFloatAsState(if (showChrome || panel != null) 1f else 0f, DS.panel(), label = "chrome")
         val ready = status.isEmpty() && error == null && dur > 0
+        LaunchedEffect(showChrome, ready) { if (showChrome && ready) runCatching { playBtnFocus.requestFocus() } }
         Box(Modifier.fillMaxWidth().height(if(landscape)72.dp else 110.dp).graphicsLayer { alpha = chromeA }
             .background(Brush.verticalGradient(listOf(Color.Black.copy(0.45f), Color.Black.copy(0.16f), Color.Transparent))))
         Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(if(landscape)100.dp else 150.dp).graphicsLayer { alpha = chromeA }
@@ -398,6 +428,7 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(if(landscape)72.dp else 44.dp)) {
                 Icon(Icons.Filled.Replay10, "后退10秒", tint = Color.White, modifier = Modifier.size(36.dp).pressClick(0.9f) { player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0)) })
                 Box(Modifier.size(68.dp).clip(CircleShape).background(Color(0x7514141A)).border(1.dp, Color.White.copy(0.18f), CircleShape)
+                    .focusRequester(playBtnFocus)
                     .pressClick(0.92f, label = if (playing) "暂停" else "播放") { if (player.isPlaying) player.pause() else player.play() },
                     contentAlignment = Alignment.Center) {
                     androidx.compose.animation.Crossfade(playing, label = "pp") { p ->

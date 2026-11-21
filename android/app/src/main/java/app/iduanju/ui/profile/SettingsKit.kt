@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.iduanju.ui.components.pressClick
 import app.iduanju.ui.theme.IdjThemeColors
 
 /** Shared building blocks for 我的 / 片源管理 / 插件 — iOS grouped rows (ProfileView.link, SourcesView.group). */
@@ -68,7 +69,7 @@ internal fun RowDivider() = HorizontalDivider(Modifier.padding(start = 52.dp), t
 @Composable
 internal fun LinkRow(title: String, icon: ImageVector?, trailing: String? = null, sub: String? = null, tint: Color? = null, onClick: () -> Unit) {
     val c = IdjThemeColors
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().pressClick(0.99f, ring = RoundedCornerShape(12.dp), onClick = onClick).padding(horizontal = 14.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) { Icon(icon, null, tint = tint ?: c.text, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(14.dp)) }
         Column(Modifier.weight(1f)) {
             Text(title, color = tint ?: c.text, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

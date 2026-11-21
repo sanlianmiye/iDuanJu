@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -73,7 +74,7 @@ fun GlassTabBar(
                             .height(48.dp)
                             .clip(RoundedCornerShape(percent = 50))
                             .background(if (on) c.text.copy(0.10f) else Color.Transparent)
-                            .clickable { onSelect(i) },
+                            .pressClick(0.97f, ring = RoundedCornerShape(percent = 50)) { onSelect(i) },
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -102,7 +103,7 @@ fun GlassTabBar(
                             Brush.verticalGradient(listOf(c.text.copy(0.18f), c.text.copy(0.05f))),
                             RoundedCornerShape(percent = 50),
                         )
-                        .clickable(onClick = onSearch),
+                        .pressClick(ring = CircleShape, onClick = onSearch),
                     contentAlignment = Alignment.Center,
                 ) {
                     searchIcon(searchSelected)
@@ -149,7 +150,7 @@ fun GlassNavigationRail(
                         Brush.verticalGradient(listOf(c.text.copy(0.18f), c.text.copy(0.05f))),
                         RoundedCornerShape(percent = 50),
                     )
-                    .clickable(onClick = onSearch),
+                    .pressClick(ring = CircleShape, onClick = onSearch),
                 contentAlignment = Alignment.Center,
             ) {
                 searchIcon(searchSelected)
@@ -180,7 +181,7 @@ fun GlassNavigationRail(
                         .height(56.dp)
                         .clip(RoundedCornerShape(22.dp))
                         .background(if (on) c.text.copy(0.10f) else Color.Transparent)
-                        .clickable { onSelect(i) },
+                        .pressClick(0.97f, ring = RoundedCornerShape(22.dp)) { onSelect(i) },
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -207,7 +208,7 @@ fun GlassChip(title: String, selected: Boolean, onClick: () -> Unit) {
             .clip(RoundedCornerShape(percent = 50))
             .background(if (selected) c.text else c.elevated)
             .then(if (!selected) Modifier.border(0.6.dp, c.text.copy(0.12f), RoundedCornerShape(percent = 50)) else Modifier)
-            .clickable(onClick = onClick)
+            .pressClick(ring = RoundedCornerShape(percent = 50), onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
         Text(

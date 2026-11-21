@@ -30,6 +30,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.RoundedCornerShape
+import app.iduanju.ui.components.pressClick
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -141,7 +143,7 @@ fun TVBoxHubScreen(
                         .clip(CircleShape)
                         .background(c.text.copy(0.07f))
                         .border(0.7.dp, c.text.copy(0.11f), CircleShape)
-                        .clickable(onClick = onOpenConfig),
+                        .pressClick(ring = RoundedCornerShape(12.dp), onClick = onOpenConfig),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Filled.Settings, null, tint = c.text, modifier = Modifier.size(16.dp))
@@ -252,7 +254,7 @@ fun TVBoxHubScreen(
 private fun HubSegmentTab(label: String, selected: Boolean, onClick: () -> Unit) {
     val c = IdjThemeColors
     Column(
-        Modifier.clickable(onClick = onClick),
+        Modifier.pressClick(ring = RoundedCornerShape(12.dp), onClick = onClick),
         horizontalAlignment = Alignment.Start,
     ) {
         Text(
@@ -822,7 +824,7 @@ private fun EmptyTVBoxState(onOpenConfig: () -> Unit) {
                 .height(44.dp)
                 .clip(RoundedCornerShape(22.dp))
                 .background(c.text)
-                .clickable(onClick = onOpenConfig)
+                .pressClick(ring = RoundedCornerShape(12.dp), onClick = onOpenConfig)
                 .padding(horizontal = 24.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -846,7 +848,7 @@ private fun EmptySectionState(msg: String, cta: String, onClick: () -> Unit) {
                 .height(38.dp)
                 .clip(RoundedCornerShape(19.dp))
                 .background(c.text)
-                .clickable(onClick = onClick)
+                .pressClick(ring = RoundedCornerShape(12.dp), onClick = onClick)
                 .padding(horizontal = 20.dp),
             contentAlignment = Alignment.Center,
         ) {

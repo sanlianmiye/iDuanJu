@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.iduanju.IdjApp
+import app.iduanju.ui.components.pressClick
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
 
@@ -51,7 +52,7 @@ fun LibraryListScreen(kind: String, onBack: () -> Unit, onOpenDetail: (String) -
             if (items.isEmpty()) Empty("还没有收藏")
             else LazyVerticalGrid(GridCells.Fixed(app.iduanju.ui.components.LocalLayoutMetrics.current.posterCols), contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 items(items, key = { it.key }) { (sid, v) ->
-                    Column(Modifier.clickable { onOpenDetail(sid) }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(Modifier.pressClick(0.97f, ring = RoundedCornerShape(12.dp)) { onOpenDetail(sid) }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(10.dp)).background(c.elevated)) {
                             AsyncImage(v.second, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                         }
@@ -64,7 +65,7 @@ fun LibraryListScreen(kind: String, onBack: () -> Unit, onOpenDetail: (String) -
             if (items.isEmpty()) Empty("还没有观看记录")
             else LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(items, key = { it.seriesId }) { p ->
-                    Row(Modifier.fillMaxWidth().clickable { onOpenDetail(p.seriesId) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(Modifier.fillMaxWidth().pressClick(0.98f, ring = RoundedCornerShape(12.dp)) { onOpenDetail(p.seriesId) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Box(Modifier.size(64.dp, 86.dp).clip(RoundedCornerShape(8.dp)).background(c.elevated)) {
                             AsyncImage(p.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                         }

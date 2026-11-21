@@ -39,6 +39,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -107,6 +109,8 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
     val actionsOut = actionsBottom < with(density) { 100.dp.toPx() }
     val startEp = resume?.episodeNumber ?: d?.episodes?.firstOrNull()?.ep ?: 1
     val playTitle = if (resume != null) "继续第 ${resume.episodeNumber} 集" else "开始播放"
+    val playFocus = remember { FocusRequester() }
+    LaunchedEffect(d) { if (d != null) runCatching { playFocus.requestFocus() } }
 
     val metrics = LocalLayoutMetrics.current
     val useTwoPane = metrics.tier == SizeTier.Expanded && d != null
@@ -144,7 +148,7 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                     val meta = listOfNotNull(if (dd.episodeLabel.isEmpty()) eps else DS.spaced(dd.episodeLabel), dd.author.ifEmpty { null }).joinToString(" · ")
                     if (meta.isNotEmpty()) Text(meta, color = c.secondary, fontSize = 13.sp)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        PillButton(playTitle, Modifier.weight(1f), icon = Icons.Filled.PlayArrow, tone = PillTone.Ink) { onPlay(seriesId, startEp) }
+                        PillButton(playTitle, Modifier.weight(1f).focusRequester(playFocus), icon = Icons.Filled.PlayArrow, tone = PillTone.Ink) { onPlay(seriesId, startEp) }
                         Heart(seriesId, dd, 48.dp)
                     }
                 }
@@ -350,7 +354,7 @@ private fun Intro(text: String) {
     var open by remember { mutableStateOf(false) }
     var clamped by remember { mutableStateOf(false) }
     Box(Modifier.padding(horizontal = 20.dp).padding(top = 14.dp).fillMaxWidth().animateContentSize(DS.panel())
-        .clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null, enabled = clamped || open) { open = !open }) {
+        .pressClick(1f, enabled = clamped || open, label = "简介") { open = !open }) {
         Text(text, color = c.secondary, fontSize = 14.sp, lineHeight = 22.sp, maxLines = if (open) Int.MAX_VALUE else 3, overflow = TextOverflow.Clip,
             onTextLayout = { if (!open) clamped = it.hasVisualOverflow })
         if (clamped && !open) Text("展开", Modifier.align(Alignment.BottomEnd).background(Brush.horizontalGradient(0f to c.bg.copy(0f), 0.42f to c.bg)).padding(start = 36.dp),

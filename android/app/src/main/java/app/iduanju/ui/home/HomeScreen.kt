@@ -35,6 +35,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
@@ -158,6 +160,8 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
     LaunchedEffect(pager.currentPage) { feedScroll = 0f }
     val pinned = with(androidx.compose.ui.platform.LocalDensity.current) { feedScroll > 8.dp.toPx() }
 
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
     Box(Modifier.fillMaxSize().background(c.bg)) {
         AmbientGlow(visible = !pinned)
         Column(Modifier.fillMaxSize().then(if (immersive) Modifier else Modifier.statusBarsPadding())) {
@@ -170,13 +174,13 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                         .border(1.dp, c.glassBorder, RoundedCornerShape(50)),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(Modifier.weight(1f).fillMaxHeight().clickable(onClick = onSearch).padding(start = 16.dp).semantics { contentDescription = "home.search" },
+                    Row(Modifier.weight(1f).fillMaxHeight().focusRequester(searchFocus).pressClick(label = "home.search", ring = RoundedCornerShape(50)) { onSearch() }.padding(start = 16.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Search, null, tint = c.secondary, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp))
                         Text("搜索你想看的作品", color = c.secondary, fontSize = 16.sp, maxLines = 1)
                     }
-                    Row(Modifier.fillMaxHeight().clickable { HomeChannelSheetOpen.value = true }.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxHeight().pressClick(label = "筛选", ring = RoundedCornerShape(50)) { HomeChannelSheetOpen.value = true }.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.FilterList, null, tint = c.text, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(5.dp))
                         Text("筛选", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
@@ -210,7 +214,7 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                         Row(Modifier.padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("红果 AI剧", "黄果 AI 站").forEachIndexed { i, t ->
                                 val on = i == sel
-                                Box(Modifier.height(30.dp).clip(RoundedCornerShape(50)).background(if (on) c.text else c.text.copy(0.1f)).clickable { HomeSubSel.map[s.label] = i }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                                Box(Modifier.height(30.dp).clip(RoundedCornerShape(50)).background(if (on) c.text else c.text.copy(0.1f)).pressClick(label = t, ring = RoundedCornerShape(50)) { HomeSubSel.map[s.label] = i }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
                                     Text(t, color = if (on) c.bg else c.text.copy(0.8f), fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
                                 }
                             }
@@ -264,7 +268,7 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
     ModalBottomSheet(onDismiss, sheetState = state, containerColor = c.surface, dragHandle = { BottomSheetDefaults.DragHandle(color = c.text.copy(0.25f)) }) {
         Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Text("频道", color = c.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
-            Box(Modifier.align(Alignment.CenterEnd).clip(RoundedCornerShape(50)).background(c.text.copy(0.1f)).clickable(onClick = onDismiss).padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Box(Modifier.align(Alignment.CenterEnd).clip(RoundedCornerShape(50)).background(c.text.copy(0.1f)).pressClick(label = "完成", ring = RoundedCornerShape(50), onClick = onDismiss).padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text("完成", color = c.accent, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
         }
@@ -287,7 +291,7 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
                             val si = subs.indexOf(t)
                             val on = pi == current && (HomeSubSel.map[labels[pi]] ?: 0) == si
                             Box(Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(10.dp)).background(if (on) c.accent.copy(0.16f) else c.text.copy(0.07f))
-                                    .clickable { onPick(pi, if (p is HomeSource && p != HomeSource.huangguo) si else null) }, contentAlignment = Alignment.Center) {
+                                    .pressClick(label = t, ring = RoundedCornerShape(10.dp)) { onPick(pi, if (p is HomeSource && p != HomeSource.huangguo) si else null) }, contentAlignment = Alignment.Center) {
                                 Text(t, color = if (on) c.accent else c.text, fontSize = 15.sp, maxLines = 1)
                             }
                         }
@@ -318,8 +322,7 @@ private fun ChannelBar(items: List<String>, selected: Int, ink: Color, onMore: (
             itemsIndexed(items) { i, label ->
                 val on = i == selected
                 // `.ttabs`: selected 24 sp heavy with a 26×4 accent bar under its leading edge.
-                Box(Modifier.height(40.dp).clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) { onSelect(i) }
-                    .semantics { contentDescription = "home.channel.$label" }, contentAlignment = Alignment.BottomStart) {
+                Box(Modifier.height(40.dp).pressClick(0.98f, label = "home.channel.$label", ring = RoundedCornerShape(10.dp)) { onSelect(i) }, contentAlignment = Alignment.BottomStart) {
                     Text(label, color = if (on) ink else (if (ink == Color.White) Color.White.copy(0.66f) else c.secondary),
                         fontSize = if (on) 24.sp else 17.sp, fontWeight = if (on) FontWeight.ExtraBold else FontWeight.Normal,
                         modifier = Modifier.padding(bottom = 6.dp), maxLines = 1)
@@ -328,7 +331,7 @@ private fun ChannelBar(items: List<String>, selected: Int, ink: Color, onMore: (
             }
             item { Spacer(Modifier.width(12.dp)) }
         }
-        Box(Modifier.size(44.dp, 40.dp).clickable(onClick = onMore), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(44.dp, 40.dp).pressClick(label = "展开全部频道", ring = CircleShape, onClick = onMore), contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.KeyboardArrowDown, "展开全部频道", tint = if (ink == Color.White) ink.copy(0.85f) else c.secondary)
         }
     }
@@ -450,7 +453,7 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
             HorizontalPager(pager, Modifier.fillMaxSize().testTag("home.hero.pager")) { i ->
                 val s = picks[i]
                 Row(Modifier.fillMaxSize().testTag("home.hero.page.$i").graphicsLayer { alpha = 1f - kotlin.math.abs(pager.getOffsetDistanceInPages(i)).coerceIn(0f, 1f) * 1.6f }
-                    .pressClick(0.98f, label = "home.hero.page.$i") { onOpen(s.seriesId) }.padding(14.dp), verticalAlignment = Alignment.Top) {
+                    .pressClick(0.98f, label = "home.hero.page.$i", ring = RoundedCornerShape(22.dp)) { onOpen(s.seriesId) }.padding(14.dp), verticalAlignment = Alignment.Top) {
                     PosterArt(s.cover, Modifier.size(posterWidth, posterWidth * 4 / 3), badge = HomeFmt.progress(s)?.let { DS.spaced(it) })
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f).fillMaxHeight().padding(top = 3.dp, bottom = 1.dp)) {
@@ -529,7 +532,7 @@ private fun homeShelfMeta(s: HGSeries): String {
 @Composable
 fun HomePosterCard(s: HGSeries, onOpen: (String) -> Unit) {
     val c = IdjThemeColors
-    Column(Modifier.clickable { onOpen(s.seriesId) }) {
+    Column(Modifier.pressClick(0.97f, label = s.title, ring = RoundedCornerShape(10.dp)) { onOpen(s.seriesId) }) {
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(10.dp)).background(c.elevated).border(0.6.dp, c.text.copy(0.12f), RoundedCornerShape(10.dp))) {
             AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             HomeFmt.progress(s)?.let { HomeBadge(it, Modifier.align(Alignment.BottomEnd).padding(5.dp)) }

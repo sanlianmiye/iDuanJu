@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.iduanju.IdjApp
 import app.iduanju.ui.LocalNavigate
+import app.iduanju.ui.components.pressClick
 import app.iduanju.ui.theme.IdjThemeColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -57,7 +58,7 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
                 favs.chunked(3).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         row.forEach { (sid, v) ->
-                            Column(Modifier.weight(1f).clickable { onOpenDetail(sid) }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(Modifier.weight(1f).pressClick(0.97f, ring = RoundedCornerShape(12.dp)) { onOpenDetail(sid) }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(10.dp)).background(c.elevated)) {
                                     coil.compose.AsyncImage(v.second, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                 }

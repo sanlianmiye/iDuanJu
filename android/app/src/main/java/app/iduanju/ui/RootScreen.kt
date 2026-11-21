@@ -39,7 +39,8 @@ fun RootScreen(initialRoute: String? = null) {
     val nav = rememberNavController()
     LaunchedEffect(initialRoute) { initialRoute?.takeUnless { it == "home" }?.let { runCatching { nav.navigate(it) } } }
     val updater = app.iduanju.IdjApp.instance.updater
-    LaunchedEffect(Unit) { updater.autoCheck() }
+    // TV build: never auto-offer the upstream phone release over this build.
+    // LaunchedEffect(Unit) { updater.autoCheck() }
     var tab by remember { mutableIntStateOf(0) }
     var novelImmersive by remember { mutableStateOf(false) }
     val back = nav.currentBackStackEntryAsState().value
