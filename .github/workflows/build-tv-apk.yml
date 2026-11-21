@@ -26,7 +26,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      # The runner image already ships an Android SDK; setup-android@v3 breaks on its
+      # cmdline-tools 16 ("Failed to find package 'tools'"), so install packages directly.
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
       - uses: gradle/actions/setup-gradle@v4
 
