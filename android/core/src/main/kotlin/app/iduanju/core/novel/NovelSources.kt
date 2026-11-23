@@ -446,7 +446,7 @@ object NovelSources {
         val reverse = raw.startsWith('-'); val rule = raw.removePrefix("-")
         val root=content as? Element ?: Jsoup.parse(content.toString())
         fun single(r: String): List<Any> = if (r.startsWith('$') || r.startsWith("@json:", true) || content is JSONObject || content is JSONArray) jsonNodes(content, r).flatMap { if(it is JSONArray)(0 until it.length()).map{n->it.get(n)} else listOf(it) }
-            else if(r.startsWith("//") || r.startsWith("/") || r.startsWith("@xpath:", true)) root.selectXpath(scopedXPath(content, r.replace(Regex("^@xpath:", RegexOption.IGNORE_CASE), ""))).toList()
+            else if(r.startsWith("//") || r.startsWith("/") || r.startsWith("@xpath:", true)) xpathNodes(root, scopedXPath(content, r.replace(Regex("^@xpath:", RegexOption.IGNORE_CASE), "")))
             else select(root, r)
         val result = splitTop(rule).let { (parts, op) -> when (op) {
                 "||" -> parts.asSequence().map { single(it) }.firstOrNull { it.isNotEmpty() } ?: emptyList()
@@ -638,8 +638,25 @@ object NovelSources {
         text
     } }
 
-    fun cleanText(raw: String): String = Jsoup.parse(raw.replace(Regex("(?i)<br\\s*/?>|</p>|</div>"), "\n")).wholeText()
-        .lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+    fun cleanText(raw: String): String {
+        val doc = Jsoup.parse(raw.replace(Regex("(?i)<br\\s*/?>|</p>|</div>"), "\n"))
+        // TV fix: some TV firmware (e.g. TCL's com.tcl.tclvoicecontrol.jar) shadows the app's
+        // jsoup with an old copy that has no Document.wholeText() (jsoup 1.14+), which crashed
+        // the whole app with NoSuchMethodError. Walk text nodes via the ancient
+        // TextNode.getWholeText() API instead — same result, present in every jsoup vintage.
+        val sb = StringBuilder()
+        fun walk(node: org.jsoup.nodes.Node) {
+            if (node is org.jsoup.nodes.TextNode) sb.append(node.getWholeText())
+            else for (child in node.childNodes()) walk(child)
+        }
+        walk(doc)
+        return sb.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
+    // TV fix: Element.selectXpath needs jsoup 1.14.3+; firmware-shadowed old jsoup lacks it.
+    // Degrade XPath rules to no matches instead of killing the app with NoSuchMethodError.
+    private fun xpathNodes(root: Element, xpath: String): List<Any> =
+        try { root.selectXpath(xpath).toList() } catch (e: NoSuchMethodError) { emptyList() }
 }
 
 /** Metadata and TOC from one real detail flow, shared by detail, shelf and download instead of a title-only TOC screen. */
