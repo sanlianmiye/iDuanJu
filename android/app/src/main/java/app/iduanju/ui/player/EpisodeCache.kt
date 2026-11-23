@@ -25,6 +25,7 @@ data class Playable(val uri: String, val quality: String?, val codec: String, va
 object EpisodeCache {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inflight = ConcurrentHashMap<String, Deferred<Playable>>()
+    private val ready = ConcurrentHashMap<String, Playable>()
     private val httpDirect = OkHttpClient.Builder().proxy(Proxy.NO_PROXY)
         .connectTimeout(20, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build()
     private val httpSystem = httpDirect.newBuilder().proxy(null).build()
@@ -32,11 +33,26 @@ object EpisodeCache {
 
     private fun dir(): File = File(IdjApp.instance.cacheDir, "hg-play").apply { mkdirs() }
 
+    /** Synchronous zero-latency lookup for episodes already downloaded & decrypted on disk. */
+    fun peek(vid: String): Playable? {
+        val hit = ready[vid] ?: return null
+        if (hit.uri.startsWith("/") && !File(hit.uri).let { it.exists() && it.length() > 0 }) {
+            ready.remove(vid, hit)
+            return null
+        }
+        return hit
+    }
+
     fun get(vid: String, onStatus: (String) -> Unit = {}): Deferred<Playable> = get(app.iduanju.core.hongguo.HGEpisode(0, vid), onStatus)
 
     fun get(ep: app.iduanju.core.hongguo.HGEpisode, onStatus: (String) -> Unit = {}): Deferred<Playable> = synchronized(inflight) {
+        peek(ep.vid)?.let { cached ->
+            return@synchronized kotlinx.coroutines.CompletableDeferred(cached)
+        }
         inflight[ep.vid]?.takeIf { it.isActive } ?: run {
-            val task = scope.async(start = CoroutineStart.LAZY) { load(ep, onStatus) }
+            val task = scope.async(start = CoroutineStart.LAZY) {
+                load(ep, onStatus).also { p -> ready[ep.vid] = p }
+            }
             inflight[ep.vid] = task
             task.invokeOnCompletion { inflight.remove(ep.vid, task) }
             task.start()

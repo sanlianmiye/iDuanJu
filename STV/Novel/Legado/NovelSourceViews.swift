@@ -426,9 +426,10 @@ struct NovelWebDetailView: View {
     @State private var mediaChapter = 0
     @State private var sourceTask: Task<Void, Never>?
     @State private var loadGeneration = UUID()
-    @State private var scrollY: CGFloat = 0
+    @State private var pinned = false
     @State private var actionsOut = false
     @State private var introOpen = false
+    @State private var cachedChapters = 0
 
     private var allItems: [LegadoSearchItem] { items + alternatives.filter { candidate in !items.contains { $0.id == candidate.id } } }
     @ObservedObject private var store = NovelStore.shared
@@ -438,7 +439,6 @@ struct NovelWebDetailView: View {
     private var onShelf: NovelBook? { store.webBook(source: item.sourceURL, url: item.bookURL) }
 
     @Environment(\.dismiss) private var dismiss
-    private var pinned: Bool { scrollY > 210 }
     private var title: String { info?.name.novelNonEmpty ?? item.name }
     private var author: String { info?.author.novelNonEmpty ?? item.author }
     private var intro: String { (info?.intro.novelNonEmpty ?? item.intro).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -446,7 +446,7 @@ struct NovelWebDetailView: View {
     private var coverURL: String? { info?.cover.novelNonEmpty ?? item.cover.novelNonEmpty }
     private var latest: String { info?.latest.novelNonEmpty ?? item.latest }
     private var chapterCount: Int { toc?.count ?? onShelf?.chapters.count ?? 0 }
-    private var cachedChapters: Int { onShelf.map { store.cachedCount($0) } ?? 0 }
+    private var cacheRefreshKey: String { "\(onShelf?.id ?? "none")|\(onShelf?.chapters.count ?? 0)|\(downloadBook == nil)" }
     private var canOpen: Bool { chapterCount > 0 }
     private var isMedia: Bool { source?.isMedia == true }
     private var readLabel: String {
@@ -473,8 +473,9 @@ struct NovelWebDetailView: View {
                 actionRow
                     .padding(.horizontal, 16)
                     .padding(.top, 15)
-                    .compatOnFrame(in: .named("novelDetail")) { f in let out = f.maxY < 60
-                        withAnimation(DS.panel) { actionsOut = out }
+                    .compatOnFrame(in: .named("novelDetail")) { f in
+                        let out = f.maxY < 60
+                        if actionsOut != out { withAnimation(DS.panel) { actionsOut = out } }
                     }
 
                 if !tags.isEmpty {
@@ -611,7 +612,9 @@ struct NovelWebDetailView: View {
             .padding(.bottom, 108)
         }
         .coordinateSpace(name: "novelDetail")
-        .compatOnScrollY { scrollY = $0 }
+        .compatOnScrolled(threshold: 210) { value in
+            if pinned != value { pinned = value }
+        }
         .scrollIndicators(.hidden)
         .ignoresSafeArea(edges: .top)
         .background(STVTheme.bg.ignoresSafeArea())
@@ -620,6 +623,13 @@ struct NovelWebDetailView: View {
         .foregroundStyle(STVTheme.text)
         .toolbar(.hidden, for: .navigationBar)
         .task(id: pick) { await load() }
+        .task(id: cacheRefreshKey) {
+            guard let book = onShelf else { cachedChapters = 0; return }
+            let count = await Task.detached(priority: .utility) {
+                NovelStore.fastCachedCount(book)
+            }.value
+            if !Task.isCancelled { cachedChapters = count }
+        }
         .onDisappear { sourceTask?.cancel() }
         .fullScreenCover(item: $reading) { NovelReaderView(book: $0) }
         .sheet(item: $downloadBook) { book in NovelDownloadView(book: book) }
@@ -688,16 +698,10 @@ struct NovelWebDetailView: View {
             Color.clear
                 .frame(height: 286)
                 .overlay {
-                    if let u = coverURL, let url = URL(string: u) {
-                        AsyncImage(url: url) { phase in
-                            if let img = phase.image {
-                                img.resizable().scaledToFill()
-                                    .frame(maxWidth: .infinity).frame(height: 380)
-                                    .blur(radius: 30, opaque: true).saturation(1.15)
-                            } else {
-                                LinearGradient(colors: [cloth.0, cloth.1], startPoint: .top, endPoint: .bottom)
-                            }
-                        }
+                    if let u = coverURL, !u.isEmpty {
+                        CoverView(url: u, corner: 0, maxPixelSize: 320)
+                            .frame(maxWidth: .infinity).frame(height: 380)
+                            .blur(radius: 22, opaque: true).saturation(1.15)
                     } else {
                         LinearGradient(colors: [cloth.0, cloth.1], startPoint: .top, endPoint: .bottom)
                     }

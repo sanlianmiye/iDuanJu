@@ -49,11 +49,8 @@ struct TVBoxVodPlayerView: View {
     @State private var speed: Float = 1.0
     @State private var fullscreen = false
     @State private var controlsVisible = true
-    @State private var isPlaying = false
-    @State private var positionSec: Double = 0
-    @State private var durationSec: Double = 0
     @State private var altMatches: [(site: TVBoxRepoSite, series: HGSeries)] = []
-    @State private var player = AVPlayer()
+    @StateObject private var player = TVBoxPlayerController()
 
     var body: some View {
         let activeSiteKey = currentSiteKey.isEmpty ? siteKey : currentSiteKey
@@ -67,12 +64,27 @@ struct TVBoxVodPlayerView: View {
         VStack(spacing: 0) {
             // 顶部 16:9 / 全屏播放舞台
             ZStack {
-                TVBoxVideoSurface(player: player, videoGravity: .resizeAspect)
+                TVBoxEngineSurface(controller: player, fill: false)
                     .contentShape(Rectangle())
                     .onTapGesture { withAnimation(.easeInOut(duration: 0.18)) { controlsVisible.toggle() } }
 
-                if loading {
+                if loading || player.isBuffering {
                     ProgressView().tint(.white)
+                }
+
+                if let playErr = player.errorMsg {
+                    VStack(spacing: 8) {
+                        Text(playErr).font(.caption).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center)
+                        Button("重试") {
+                            player.play(urlString: activeStream?.url, title: resolvedTitle, rate: Double(speed))
+                        }
+                        .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.white.opacity(0.18), in: Capsule())
+                        .buttonStyle(.plain)
+                    }
+                    .padding(12)
+                    .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 12))
                 }
 
                 if controlsVisible {
@@ -92,7 +104,7 @@ struct TVBoxVodPlayerView: View {
                                     .background(Color.black.opacity(0.55), in: Circle())
                             }.buttonStyle(.plain)
 
-                            Text(activeStream?.quality ?? "HLS · 直链")
+                            Text("\(player.engineKind.short) · \(activeStream?.quality ?? "直链")")
                                 .font(.caption2.weight(.semibold)).foregroundStyle(.white)
                                 .padding(.horizontal, 9).padding(.vertical, 4)
                                 .background(Color.black.opacity(0.45), in: Capsule())
@@ -107,10 +119,9 @@ struct TVBoxVodPlayerView: View {
                                 Image(systemName: "gobackward.10").font(.title2).foregroundStyle(.white)
                             }.buttonStyle(.plain)
                             Button {
-                                if player.timeControlStatus == .playing { player.pause(); isPlaying = false }
-                                else { player.playImmediately(atRate: speed); isPlaying = true }
+                                player.togglePlay()
                             } label: {
-                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                                     .font(.title3).foregroundStyle(.white)
                                     .frame(width: 48, height: 48)
                                     .background(Color.black.opacity(0.6), in: Circle())
@@ -124,18 +135,17 @@ struct TVBoxVodPlayerView: View {
                         Spacer()
 
                         HStack(spacing: 8) {
-                            Text(fmtSec(positionSec)).font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                            Text(fmtSec(player.positionSec)).font(.caption2.monospacedDigit()).foregroundStyle(.white)
                             Slider(
                                 value: Binding(
-                                    get: { durationSec > 0 ? min(1, max(0, positionSec / durationSec)) : 0 },
+                                    get: { player.durationSec > 0 ? min(1, max(0, player.positionSec / player.durationSec)) : 0 },
                                     set: { frac in
-                                        guard durationSec > 0 else { return }
-                                        let t = CMTime(seconds: frac * durationSec, preferredTimescale: 600)
-                                        player.seek(to: t)
+                                        guard player.durationSec > 0 else { return }
+                                        player.seek(to: frac * player.durationSec)
                                     }
                                 )
                             ).tint(.white)
-                            Text(fmtSec(durationSec)).font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                            Text(fmtSec(player.durationSec)).font(.caption2.monospacedDigit()).foregroundStyle(.white)
                             Button {
                                 fullscreen.toggle()
                                 if fullscreen { OrientationGate.enterLandscape() } else { OrientationGate.lockPortrait() }
@@ -166,7 +176,7 @@ struct TVBoxVodPlayerView: View {
                             Spacer()
                             Button {
                                 speed = speed == 1.0 ? 1.25 : (speed == 1.25 ? 1.5 : (speed == 1.5 ? 2.0 : 1.0))
-                                if player.timeControlStatus == .playing { player.rate = speed }
+                                player.setRate(Double(speed))
                             } label: {
                                 Text(String(format: "%.2g×", speed))
                                     .font(.caption.weight(.semibold)).foregroundStyle(STVTheme.text)
@@ -281,32 +291,24 @@ struct TVBoxVodPlayerView: View {
             await loadCrossSiteMatches(title: resolvedTitle, excludeSiteKey: activeSiteKey)
         }
         .compatOnChange(of: activeStream?.url) { newURL in
-            guard let u = newURL, let url = URL(string: u) else { return }
-            let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": PluginHostContext.defaultUA]])
-            player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
-            player.playImmediately(atRate: speed)
-            isPlaying = true
+            player.play(urlString: newURL, title: resolvedTitle, rate: Double(speed))
         }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                let cur = player.currentTime().seconds
-                let dur = player.currentItem?.duration.seconds ?? 0
-                if cur.isFinite { positionSec = max(0, cur) }
-                if dur.isFinite && dur > 0 { durationSec = dur }
-                if let d = detail, let ep = currentEp, let site, positionSec > 2 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if let d = detail, let ep = currentEp, let site, player.positionSec > 2 {
                     store.recordWatch(TVBoxRecentWatch(
                         siteKey: site.key, siteName: site.name, seriesId: activeSeriesId,
                         title: d.title, cover: d.cover.isEmpty ? initialCover : d.cover,
                         episodeIndex: epIndex, episodeTitle: ep.title,
                         lineName: activeStream?.quality?.components(separatedBy: " · ").first ?? "",
-                        positionSec: positionSec, durationSec: durationSec
+                        positionSec: player.positionSec, durationSec: player.durationSec
                     ))
                 }
             }
         }
         .onDisappear {
-            player.pause()
+            player.stop()
             OrientationGate.lockPortrait()
         }
     }
@@ -320,12 +322,8 @@ struct TVBoxVodPlayerView: View {
             detail = d
             epIndex = min(max(0, startEp), max(0, d.episodes.count - 1))
             if let ep = d.episodes.indices.contains(epIndex) ? d.episodes[epIndex] : nil,
-               let firstURL = MacCMSProvider.streams(for: ep).first?.url,
-               let url = URL(string: firstURL) {
-                let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": PluginHostContext.defaultUA]])
-                player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
-                player.playImmediately(atRate: speed)
-                isPlaying = true
+               let firstURL = MacCMSProvider.streams(for: ep).first?.url {
+                player.play(urlString: firstURL, title: d.title, rate: Double(speed))
             }
         } catch {
             errorMsg = error.localizedDescription
@@ -354,8 +352,7 @@ struct TVBoxVodPlayerView: View {
     }
 
     private func seek(by delta: Double) {
-        let target = max(0, positionSec + delta)
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        player.seek(to: player.positionSec + delta)
     }
 
     private func fmtSec(_ sec: Double) -> String {

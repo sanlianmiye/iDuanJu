@@ -83,7 +83,8 @@ internal fun NovelBookDetail(
     val density = LocalDensity.current
     val pinned by remember { derivedStateOf { scroll.value > with(density) { 210.dp.toPx() } } }
     var actionsBottom by remember { mutableFloatStateOf(Float.MAX_VALUE) }
-    val actionsOut = actionsBottom < with(density) { 100.dp.toPx() }
+    val actionsThresholdPx = with(density) { 100.dp.toPx() }
+    val actionsOut by remember(actionsThresholdPx) { derivedStateOf { actionsBottom < actionsThresholdPx } }
     val chapterCount = chapters.size
     val enabled = chapterCount > 0 && (onShelf || !loading)
     val media = mediaType == 1 || mediaType == 4

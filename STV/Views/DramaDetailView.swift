@@ -220,9 +220,9 @@ struct DramaDetailView: View {
     private var hero: some View {
         ZStack(alignment: .bottomLeading) {
             // `.bd`: the poster itself, blurred 30 pt and saturated, bleeding past the hero edges.
-            CoverView(url: cover, corner: 0, fallback: series.cover)
+            CoverView(url: cover, corner: 0, maxPixelSize: 640, fallback: series.cover)
                 .frame(maxWidth: .infinity).frame(height: 400)
-                .blur(radius: 30, opaque: true).saturation(1.15)
+                .blur(radius: 22, opaque: true).saturation(1.15)
                 .drawingGroup(opaque: true)
                 .frame(height: 300).clipped()
                 .overlay(LinearGradient(stops: [.init(color: .black.opacity(0.30), location: 0), .init(color: .black.opacity(0.08), location: 0.34),
@@ -291,8 +291,29 @@ struct DramaDetailView: View {
             .padding(.top, 16)
         }
         if d.cast.isEmpty && !d.actors.isEmpty {
-            Text("主演：" + d.actors.joined(separator: " / "))
-                .font(.system(size: 12)).foregroundStyle(STVTheme.secondary).padding(.horizontal, 20).padding(.top, 12)
+            let names = d.actors.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            if !names.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Text("主演").font(.system(size: 12)).foregroundStyle(STVTheme.secondary)
+                        ForEach(names, id: \.self) { name in
+                            NavigationLink(value: Route.searchFor(name)) {
+                                Text(name)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(STVTheme.text)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 26)
+                                    .background(STVTheme.glass, in: Capsule())
+                                    .overlay(Capsule().strokeBorder(STVTheme.hairline, lineWidth: 0.6))
+                            }
+                            .buttonStyle(PressScale())
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .padding(.top, 12)
+            }
         }
         if !d.desc.isEmpty { intro(d.desc).padding(.top, 14) }
 
@@ -421,7 +442,13 @@ struct DramaDetailView: View {
                             Text(c.name).font(.system(size: 12, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1).padding(.top, 6)
                             if !c.role.isEmpty { Text(c.role).font(.system(size: 11)).foregroundStyle(STVTheme.secondary).lineLimit(1) }
                         }.frame(width: 64)
-                        if c.id.isEmpty { cell } else { NavigationLink(value: Route.actor(c)) { cell }.buttonStyle(PressScale()) }
+                        if !c.id.isEmpty {
+                            NavigationLink(value: Route.actor(c)) { cell }.buttonStyle(PressScale())
+                        } else if !c.name.isEmpty {
+                            NavigationLink(value: Route.searchFor(c.name)) { cell }.buttonStyle(PressScale())
+                        } else {
+                            cell
+                        }
                     }
                 }.padding(.horizontal, 20)
             }

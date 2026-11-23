@@ -80,16 +80,22 @@ fun NovelMediaPlayer(state: NovelPlayback.State, onClose: () -> Unit) {
         }
     }
     Box(Modifier.fillMaxSize().testTag("novel.media.player")) {
-        val status = "已播放 %.2f 秒 · %s".format(java.util.Locale.ROOT, position / 1000.0, if (playing) "播放中" else "暂停")
-        Box(Modifier.fillMaxSize().testTag("novel.media.status").semantics { stateDescription = status }) {
+        Box(
+            Modifier.fillMaxSize().testTag("novel.media.status").semantics {
+                stateDescription = "已播放 %.2f 秒 · %s".format(java.util.Locale.ROOT, position / 1000.0, if (playing) "播放中" else "暂停")
+            },
+        ) {
             if (state.video) {
                 val detail = remember(state.queue) {
                     val episodes = state.queue.titles.mapIndexed { i, title -> HGEpisode(i + 1, i.toString(), title = title) }
                     HGSeriesDetail(seriesId = "novel:" + state.queue.key, title = state.queue.book, episodes = episodes,
                         totalEps = episodes.size, source = "视频书", cover = state.queue.cover)
                 }
-                PlayerScreen(detail.seriesId, state.index + 1, onClose, VideoQueueSession(player, detail, state.index,
-                    state.media == null && state.failure == null, state.failure, NovelPlayback::select))
+                val loading = state.media == null && state.failure == null
+                val session = remember(player, detail, state.index, loading, state.failure) {
+                    VideoQueueSession(player, detail, state.index, loading, state.failure, NovelPlayback::select)
+                }
+                PlayerScreen(detail.seriesId, state.index + 1, onClose, session)
             } else {
                 AudioBookPlayer(state, position, duration, playing, onClose)
             }

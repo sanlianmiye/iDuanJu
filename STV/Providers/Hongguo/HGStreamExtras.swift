@@ -17,6 +17,7 @@ extension HongguoClient {
     /// HTTP 200 with an empty body.
     private static let webPlayerOrigin = "https://hongguoduanju.com/player/"
     private static let webPlayerUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1"
+    private static let webSession: URLSession = URLSession(configuration: .ephemeral)
 
     func resolve(seriesId: String, vid: String) async throws -> HGResolvedVideo {
         if let hit = cachedResolve(vid), hit.note != "web" { return hit }
@@ -52,8 +53,7 @@ extension HongguoClient {
         var request = URLRequest(url: pageURL, timeoutInterval: 12)
         request.setValue(Self.webPlayerUA, forHTTPHeaderField: "User-Agent")
         request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
-        let webSession = URLSession(configuration: .ephemeral)
-        let (data, response) = try await webSession.data(for: request)
+        let (data, response) = try await Self.webSession.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw ProviderError.upstream("红果网页取流 HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
         }

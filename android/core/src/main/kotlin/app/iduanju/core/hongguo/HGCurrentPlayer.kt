@@ -56,7 +56,8 @@ object HGCurrentPlayer {
         pb += str(7u,version) + str(8u,"v04.10.03-ml-android") + n(9u,135529984/2) + s.pBytes(10u,ByteArray(8)) + n(12u,t.toLong())
         pb += s.pBytes(13u,factor) + s.pBytes(14u,hash) + s.pBytes(15u,n(1u,1)+n(2u,1)+n(3u,1)) + n(17u,t.toLong()) + str(20u,"none") + n(21u,377)
         pb += s.pBytes(23u,n(1u,100)+n(5u,7)+str(6u,"v04.10.03.04-bugfix")+n(7u,10001)+str(14u,version))
-        return pb + str(24u,"""{"cmr":16777216,"cmr2":16777216,"vpn":0,"kd":0,"dyn":"","do":0,"tk":false}""")
+        // Primary anonymous batch endpoint requires a nonempty length-delimited field 25 (2026-11-21).
+        return pb + str(24u,"""{"cmr":16777216,"cmr2":16777216,"vpn":0,"kd":0,"dyn":"","do":0,"tk":false}""") + str(25u,"AAAAAAAAAAAAAAAAAAAAAAAAA")
     }
 
     internal fun factor(input: ByteArray, seconds: UInt, selector: Int): ByteArray {

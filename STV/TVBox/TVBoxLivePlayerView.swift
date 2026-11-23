@@ -17,8 +17,7 @@ struct TVBoxLivePlayerView: View {
     @State private var controlsVisible = true
     @State private var drawerGroup = "全部"
     @State private var fillMode = false
-    @State private var isPlaying = true
-    @State private var player = AVPlayer()
+    @StateObject private var player = TVBoxPlayerController()
 
     var body: some View {
         let repo = store.repos.first { $0.id == repoId } ?? store.activeRepo
@@ -35,10 +34,30 @@ struct TVBoxLivePlayerView: View {
         let streamURL = currentChannel?.urls.indices.contains(lineIdx) == true ? currentChannel?.urls[lineIdx] : currentChannel?.urls.first
 
         ZStack {
-            TVBoxVideoSurface(player: player, videoGravity: fillMode ? .resizeAspectFill : .resizeAspect)
+            TVBoxEngineSurface(controller: player, fill: fillMode)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { withAnimation(.easeInOut(duration: 0.18)) { controlsVisible.toggle() } }
+
+            if player.isBuffering && player.errorMsg == nil {
+                ProgressView().tint(.white).scaleEffect(1.2)
+            }
+            if let err = player.errorMsg {
+                VStack(spacing: 10) {
+                    Text(err).font(.caption).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center)
+                    Button("重试当前线路") {
+                        player.play(urlString: streamURL, title: currentChannel?.name ?? "直播")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .background(Color.white.opacity(0.18), in: Capsule())
+                    .buttonStyle(.plain)
+                }
+                .padding(16)
+                .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 14))
+                .padding(.trailing, drawerOpen ? 270 : 0)
+            }
 
             // 左侧安静播控层
             if controlsVisible {
@@ -56,7 +75,7 @@ struct TVBoxLivePlayerView: View {
                             Text(currentChannel?.name ?? "直播频道").font(.headline.weight(.bold)).foregroundStyle(.white)
                             HStack(spacing: 6) {
                                 Circle().fill(Color(red: 1.0, green: 0.42, blue: 0.42)).frame(width: 7, height: 7)
-                                Text("LIVE · 线路 \(lineIdx + 1)/\(max(1, currentChannel?.urls.count ?? 1)) · \(live?.name ?? "")")
+                                Text("LIVE · \(player.engineKind.short) · 线路 \(lineIdx + 1)/\(max(1, currentChannel?.urls.count ?? 1)) · \(live?.name ?? "")")
                                     .font(.caption2).foregroundStyle(.white.opacity(0.72))
                             }
                         }
@@ -66,10 +85,9 @@ struct TVBoxLivePlayerView: View {
                     Spacer()
 
                     Button {
-                        if player.timeControlStatus == .playing { player.pause(); isPlaying = false }
-                        else { player.play(); isPlaying = true }
+                        player.togglePlay()
                     } label: {
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                             .font(.title3).foregroundStyle(.white)
                             .frame(width: 50, height: 50)
                             .background(Color.black.opacity(0.58), in: Circle())
@@ -178,7 +196,7 @@ struct TVBoxLivePlayerView: View {
             channelIdx = max(0, startChannelIndex)
         }
         .onDisappear {
-            player.pause()
+            player.stop()
             OrientationGate.lockPortrait()
         }
         .task(id: "\(repoId)|\(liveId)") {
@@ -189,18 +207,10 @@ struct TVBoxLivePlayerView: View {
             }
             if let ch = channels.indices.contains(channelIdx) ? channels[channelIdx] : channels.first {
                 drawerGroup = ch.group
-                play(urlString: ch.urls.first)
+                player.play(urlString: ch.urls.first, title: ch.name)
             }
         }
-        .compatOnChange(of: streamURL) { u in play(urlString: u) }
-    }
-
-    private func play(urlString: String?) {
-        guard let u = urlString, let url = URL(string: u) else { return }
-        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": PluginHostContext.defaultUA]])
-        player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
-        player.play()
-        isPlaying = true
+        .compatOnChange(of: streamURL) { u in player.play(urlString: u, title: currentChannel?.name ?? "直播") }
     }
 
     private func landPill(_ title: String, icon: String? = nil, active: Bool = false, action: @escaping () -> Void) -> some View {

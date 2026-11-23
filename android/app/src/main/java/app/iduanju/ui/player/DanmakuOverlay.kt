@@ -46,7 +46,7 @@ fun DanmakuOverlay(player: Player, seriesId: String, vid: String, laneTop: Dp, b
         raw = r.items
         onStatus(if (r.items.isEmpty()) r.notice else r.notice.ifEmpty { "本集 ${r.items.size} 条" })
     }
-    val measurer = rememberTextMeasurer()
+    val measurer = rememberTextMeasurer(cacheSize = 64)
     val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val W = with(density) { maxWidth.toPx() }
@@ -60,30 +60,40 @@ fun DanmakuOverlay(player: Player, seriesId: String, vid: String, laneTop: Dp, b
         val placed = remember(raw, maxWidth, rows) {
             DanmakuLayout.layout(DanmakuMerger.merge(raw), rows, maxWidth.value, DanmakuPrefs.FONT, DanmakuPrefs.DURATION, true)
         }
+        if (placed.isEmpty()) return@BoxWithConstraints
+        val parsedColors = remember(placed) {
+            placed.map { p -> runCatching { Color(android.graphics.Color.parseColor(p.item.color)) }.getOrDefault(Color.White) }
+        }
         var t by remember { mutableDoubleStateOf(0.0) }
         LaunchedEffect(placed) {
             while (isActive) { withFrameNanos { }; t = player.currentPosition / 1000.0 }
         }
-        if (placed.isEmpty()) return@BoxWithConstraints
-        val styleBase = TextStyle(fontSize = DanmakuPrefs.FONT.sp, shadow = Shadow(Color.Black.copy(0.85f), Offset(0f, 1f), 2.4f))
+        val styleBase = remember {
+            TextStyle(fontSize = DanmakuPrefs.FONT.sp, shadow = Shadow(Color.Black.copy(0.85f), Offset(0f, 1f), 2.4f))
+        }
+        val badgeStyle = remember {
+            styleBase.copy(color = Color(0xFFFFB347).copy(alpha = DanmakuPrefs.OPACITY), fontSize = (DanmakuPrefs.FONT * 0.8f).sp, fontWeight = FontWeight.Black)
+        }
         Canvas(Modifier.fillMaxSize()) {
             val dur = DanmakuPrefs.DURATION
+            val now = t
             var lo = 0; var hi = placed.size
-            while (lo < hi) { val m = (lo + hi) / 2; if (placed[m].item.time < t - dur) lo = m + 1 else hi = m }
+            while (lo < hi) { val m = (lo + hi) / 2; if (placed[m].item.time < now - dur) lo = m + 1 else hi = m }
             var i = lo
             while (i < placed.size) {
-                val p = placed[i]; if (p.item.time > t) break; i++
-                val elapsed = t - p.item.time
+                val p = placed[i]; if (p.item.time > now) break
+                val color = parsedColors[i].copy(alpha = DanmakuPrefs.OPACITY)
+                i++
+                val elapsed = now - p.item.time
                 if (elapsed < 0 || elapsed >= dur || p.lane >= rows) continue
                 val wPx = p.width.dp.toPx()
                 val x = (W - (elapsed / dur).toFloat() * (W + wPx))
                 val y = laneTop.toPx() + p.lane * laneH.dp.toPx()
                 val merged = p.item.count > 1
-                val color = runCatching { Color(android.graphics.Color.parseColor(p.item.color)) }.getOrDefault(Color.White).copy(alpha = DanmakuPrefs.OPACITY)
                 val layout = measurer.measure(p.text, styleBase.copy(color = color, fontWeight = if (merged || p.item.likes >= 50) FontWeight.Bold else FontWeight.SemiBold))
                 drawText(layout, topLeft = Offset(x, y - layout.size.height / 2f))
                 if (merged) {
-                    val b = measurer.measure(p.badge, styleBase.copy(color = Color(0xFFFFB347).copy(alpha = DanmakuPrefs.OPACITY), fontSize = (DanmakuPrefs.FONT * 0.8f).sp, fontWeight = FontWeight.Black))
+                    val b = measurer.measure(p.badge, badgeStyle)
                     drawText(b, topLeft = Offset(x + layout.size.width + 4.dp.toPx(), y - b.size.height / 2f))
                 }
             }

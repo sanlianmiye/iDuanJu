@@ -177,6 +177,7 @@ fun TVBoxLivePlayerScreen(
                 Modifier
                     .fillMaxHeight()
                     .fillMaxWidth()
+                    .safeDrawingPadding()
                     .padding(end = if (drawerOpen) 276.dp else 0.dp)
                     .padding(horizontal = 20.dp, vertical = 18.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
@@ -185,14 +186,14 @@ fun TVBoxLivePlayerScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier
-                            .size(34.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
                             .background(Color(0x8F101218))
                             .border(0.8.dp, Color.White.copy(0.16f), CircleShape)
                             .clickable(onClick = onBack),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                     Spacer(Modifier.width(12.dp))
                     Column {

@@ -100,4 +100,10 @@ struct MediaTrack: Identifiable, Hashable, Sendable {
     func setPiPActive(_ active: Bool)
     /// Short route note for the tech strip ("Aether · loopback").
     var routeLabel: String { get }
+    /// Real-time GPU sharpening level (0 = off, 1 = standard, 2 = strong).
+    func setSharpen(_ level: Int)
+}
+
+extension PlayerEngine {
+    func setSharpen(_ level: Int) {}
 }

@@ -16,8 +16,8 @@ android {
         applicationId = "app.iduanju"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1622
-        versionName = "1.6.19-tv.3"
+        versionCode = 1627
+        versionName = "1.6.26-tv.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -47,6 +47,10 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true; compose = true }
+    lint {
+        // lifecycle 2.9.x (pulled by backdrop/Compose 1.9) lint detector crashes under AGP 8.7.3 Kotlin Analysis API
+        disable += "NullSafeMutableLiveData"
+    }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     // 推荐插件: the same .idjplugin bundles the iOS app ships (STV/Resources/Plugins), copied at build time
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/idj-assets"))
@@ -73,14 +77,17 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-effect:1.5.1")
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
     implementation("androidx.media3:media3-ui:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     // OkHttp (HTTP/2) for player requests: some CDNs behind Cloudflare 403 HttpURLConnection (HTTP/1.1 only)
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
-    // Haze (Apache-2.0): backdrop blur for the floating tab bar, like iOS .ultraThinMaterial
+    // Haze (Apache-2.0): backdrop blur for sticky bars/sheets
     implementation("dev.chrisbanes.haze:haze:1.5.0")
+    // AndroidLiquidGlass (Apache-2.0): liquid glass backdrop refraction & vibrancy for floating navigation
+    implementation("io.github.kyant0:backdrop:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("wang.harlon.quickjs:wrapper-android:3.2.3")
     debugImplementation("androidx.compose.ui:ui-tooling")

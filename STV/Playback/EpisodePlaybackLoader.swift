@@ -14,38 +14,58 @@ enum EpisodePlaybackLoader {
         return cacheDir.appendingPathComponent("\(vid)-\(safeId).mp4")
     }
 
+    private actor Inflight {
+        private var tasks: [String: Task<URL, Error>] = [:]
+        func run(key: String, work: @escaping @Sendable () async throws -> URL) async throws -> URL {
+            if let existing = tasks[key] { return try await existing.value }
+            let task = Task { try await work() }
+            tasks[key] = task
+            defer { tasks[key] = nil }
+            return try await task.value
+        }
+    }
+    private static let inflight = Inflight()
+
     /// Previously decrypted copy of this stream, if still on disk.
     static func cachedFile(vid: String, stream: HGStream) -> URL? {
- let out = fileURL(vid: vid, stream: stream)
-        return FileManager.default.fileExists(atPath: out.path) ? out : nil
+        let out = fileURL(vid: vid, stream: stream)
+        guard FileManager.default.fileExists(atPath: out.path) else { return nil }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: out.path)
+        return out
     }
 
     static func playableFile(vid: String, stream: HGStream) async throws -> URL {
         let out = fileURL(vid: vid, stream: stream)
-        if FileManager.default.fileExists(atPath: out.path) { return out }
-        guard let src = URL(string: stream.url) else { throw URLError(.badURL) }
+        if FileManager.default.fileExists(atPath: out.path) {
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: out.path)
+            return out
+        }
+        return try await inflight.run(key: out.lastPathComponent) {
+            if FileManager.default.fileExists(atPath: out.path) { return out }
+            guard let src = URL(string: stream.url) else { throw URLError(.badURL) }
 
-        let tmp: URL
-        do {
-            tmp = try await download(src, headers: stream.headers)
-        } catch {
+            let tmp: URL
+            do {
+                tmp = try await download(src, headers: stream.headers)
+            } catch {
+                try Task.checkCancellation()
+                guard let backup = stream.backupURL else { throw error }
+                tmp = try await download(backup, headers: stream.headers)
+            }
+            defer { try? FileManager.default.removeItem(at: tmp) }
             try Task.checkCancellation()
-            guard let backup = stream.backupURL else { throw error }
-            tmp = try await download(backup, headers: stream.headers)
+            let data = try Data(contentsOf: tmp, options: .mappedIfSafe)
+            if stream.key.isEmpty {
+                try data.write(to: out, options: .atomic)
+            } else {
+                var bytes = [UInt8](data)
+                try CENCDecryptor.decrypt(&bytes, keyHex: stream.key)
+                try Task.checkCancellation()
+                try Data(bytes).write(to: out, options: .atomic)
+            }
+            pruneCache(keep: 12)
+            return out
         }
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        try Task.checkCancellation()
-        let data = try Data(contentsOf: tmp, options: .mappedIfSafe)
-        if stream.key.isEmpty {
-            try data.write(to: out, options: .atomic)
-        } else {
-            var bytes = [UInt8](data)
-            try CENCDecryptor.decrypt(&bytes, keyHex: stream.key)
-            try Task.checkCancellation()
-            try Data(bytes).write(to: out, options: .atomic)
-        }
-        pruneCache(keep: 8)
-        return out
     }
 
     private static func download(_ url: URL, headers: [String: String]) async throws -> URL {

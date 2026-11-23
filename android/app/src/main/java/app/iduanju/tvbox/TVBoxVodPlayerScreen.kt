@@ -119,16 +119,31 @@ fun TVBoxVodPlayerScreen(
         exo.addListener(listener)
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity?.window?.let { w ->
+                androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
             exo.removeListener(listener)
             exo.release()
         }
     }
+
+    androidx.activity.compose.BackHandler(enabled = fullscreen) { fullscreen = false }
 
     LaunchedEffect(fullscreen) {
         activity?.requestedOrientation = if (fullscreen) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         } else {
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        activity?.window?.let { w ->
+            val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+            ic.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (fullscreen) {
+                ic.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            } else {
+                ic.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
@@ -256,24 +271,30 @@ fun TVBoxVodPlayerScreen(
             }
 
             if (controlsVisible) {
-                // 顶栏
+                // 顶栏（全屏时避开状态栏与挖孔区域，并拦截空白点击防止误关播控）
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopStart)
                         .background(Color(0x66000000))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null,
+                            onClick = {},
+                        )
+                        .then(if (fullscreen) Modifier.statusBarsPadding().displayCutoutPadding() else Modifier)
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(
                         Modifier
-                            .size(32.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
                             .background(Color(0x88101218))
                             .clickable { if (fullscreen) fullscreen = false else onBack() },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                     Spacer(Modifier.width(8.dp))
                     Box(
@@ -323,6 +344,12 @@ fun TVBoxVodPlayerScreen(
                         .fillMaxWidth()
                         .align(Alignment.BottomStart)
                         .background(Color(0x80000000))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null,
+                            onClick = {},
+                        )
+                        .then(if (fullscreen) Modifier.navigationBarsPadding().displayCutoutPadding() else Modifier)
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

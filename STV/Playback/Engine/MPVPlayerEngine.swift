@@ -16,6 +16,15 @@ final class MPVMetalLayer: CAMetalLayer {
             super.drawableSize = newValue
         }
     }
+
+    // Disable implicit CoreAnimation bounds/position animations during rotation so the frame
+    // never lags or jumps from the bottom-left corner.
+    override func action(forKey event: String) -> CAAction? {
+        if event == "bounds" || event == "position" || event == "frame" || event == "drawableSize" || event == "contents" {
+            return NSNull()
+        }
+        return super.action(forKey: event)
+    }
 }
 
 final class MPVMetalView: UIView {
@@ -29,19 +38,32 @@ final class MPVMetalView: UIView {
         super.init(frame: frame)
         backgroundColor = .black
         isUserInteractionEnabled = false
+        contentMode = .scaleAspectFit
         metalLayer.contentsScale = UIScreen.main.scale
+        metalLayer.contentsGravity = .resizeAspect
         metalLayer.wantsExtendedDynamicRangeContent = true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    func setFill(_ fill: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentMode = fill ? .scaleAspectFill : .scaleAspectFit
+        metalLayer.contentsGravity = fill ? .resizeAspectFill : .resizeAspect
+        CATransaction.commit()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         let scale = window?.screen.scale ?? UIScreen.main.scale
-        metalLayer.contentsScale = scale
         let size = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
         guard size.width > 1, size.height > 1 else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalLayer.contentsScale = scale
         metalLayer.drawableSize = size
+        CATransaction.commit()
         guard size != reportedDrawableSize else { return }
         reportedDrawableSize = size
         onResize?()
@@ -71,6 +93,10 @@ final class MPVMetalView: UIView {
     private var lastURL: URL?
     private var refitTask: Task<Void, Never>?
     private let videoQueue = DispatchQueue(label: "stv.mpv.video", qos: .userInitiated)
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var suspendedForBackground = false
+    private var savedVidForBackground = "auto"
+    private var resumeAfterBackground = false
 
     // Cached playback state updated from libmpv property observations / queries.
     private var cachedTime: Double = 0
@@ -111,15 +137,74 @@ final class MPVMetalView: UIView {
         hostView.onResize = { [weak self] in
             Task { @MainActor [weak self] in self?.scheduleVideoRefit() }
         }
+        observeAppLifecycle()
         startEventLoop()
     }
 
     deinit {
         shuttingDown = true
         refitTask?.cancel()
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        // Drain any pending videoQueue property calls before destroying mpv_handle* to avoid use-after-free.
+        videoQueue.sync {}
         if let handle = mpv {
             mpv_wakeup(handle)
             mpv_terminate_destroy(handle)
+        }
+    }
+
+    private func observeAppLifecycle() {
+        let nc = NotificationCenter.default
+        lifecycleObservers.append(
+            nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.handleDidEnterBackground() }
+            }
+        )
+        lifecycleObservers.append(
+            nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.restoreFromBackgroundIfNeeded() }
+            }
+        )
+        lifecycleObservers.append(
+            nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.restoreFromBackgroundIfNeeded() }
+            }
+        )
+    }
+
+    private func handleDidEnterBackground() {
+        guard !shuttingDown, mounted, !suspendedForBackground, let handle = mpv else { return }
+        refitTask?.cancel()
+        suspendedForBackground = true
+        resumeAfterBackground = !cachedPaused
+        let currentVid = getStringProperty("vid") ?? "auto"
+        savedVidForBackground = (currentVid == "no" || currentVid.isEmpty) ? "auto" : currentVid
+        // Tear down MoltenVK/Metal VO and pause before iOS revokes background GPU access,
+        // preventing frozen video / A-V desync after lock-screen unlock.
+        var pauseFlag: Int32 = 1
+        _ = mpv_set_property(handle, "pause", MPV_FORMAT_FLAG, &pauseFlag)
+        _ = mpv_set_property_string(handle, "vid", "no")
+    }
+
+    private func restoreFromBackgroundIfNeeded() {
+        guard !shuttingDown, suspendedForBackground, let handle = mpv else { return }
+        suspendedForBackground = false
+        guard mounted else { return }
+        hostView.setNeedsLayout()
+        hostView.layoutIfNeeded()
+        let restoreVid = savedVidForBackground
+        let shouldResume = resumeAfterBackground || !cachedPaused
+        let seekPos: Double? = cachedDuration > 0 ? max(0, cachedTime) : nil
+        videoQueue.async { [weak self] in
+            guard let self, !self.shuttingDown else { return }
+            _ = mpv_set_property_string(handle, "vid", restoreVid)
+            if let seekPos {
+                Self.runCommand(handle, ["seek", String(format: "%.3f", seekPos), "absolute+exact"])
+            }
+            if shouldResume {
+                var flag: Int32 = 0
+                _ = mpv_set_property(handle, "pause", MPV_FORMAT_FLAG, &flag)
+            }
         }
     }
 
@@ -139,6 +224,10 @@ final class MPVMetalView: UIView {
         // Enable native HDR / Dolby Vision colorspace hint (libdovi parses Profile 5/7/8 RPU).
         setOpt("target-colorspace-hint", "yes")
         setOpt("tone-mapping", "auto")
+        let savedEnhance = UserDefaults.standard.integer(forKey: "stv.player.enhance")
+        if savedEnhance > 0 {
+            setOpt("sharpen", savedEnhance >= 2 ? "1.0" : "0.55")
+        }
         // Audio: AudioUnit output with FFmpeg decoding DTS / DTS-HD / TrueHD / AC3 / E-AC3.
         setOpt("ao", "audiounit")
         setOpt("audio-channels", "auto-safe")
@@ -326,6 +415,11 @@ final class MPVMetalView: UIView {
         _ = mpv_set_property_string(handle, "http-header-fields", extra)
         _ = mpv_set_property_string(handle, "start", (start ?? 0) > 0 ? String(format: "%.3f", start ?? 0) : "none")
         _ = mpv_set_property_string(handle, "pause", "yes")
+        if suspendedForBackground {
+            suspendedForBackground = false
+            resumeAfterBackground = false
+            _ = mpv_set_property_string(handle, "vid", "auto")
+        }
 
         var timedOut = false
         let timer = Task { [weak self] in
@@ -358,6 +452,10 @@ final class MPVMetalView: UIView {
 
     private func command(_ args: [String]) {
         guard let handle = mpv else { return }
+        Self.runCommand(handle, args)
+    }
+
+    nonisolated private static func runCommand(_ handle: OpaquePointer, _ args: [String]) {
         var cArgs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
         cArgs.append(nil)
         defer { cArgs.forEach { if let p = $0 { free(p) } } }
@@ -369,12 +467,18 @@ final class MPVMetalView: UIView {
 
     func play(rate: Double) {
         guard let handle = mpv else { return }
+        setRate(rate)
+        if suspendedForBackground {
+            resumeAfterBackground = true
+            cachedPaused = false
+            restoreFromBackgroundIfNeeded()
+            return
+        }
         // If at EOF, seek to 0 before resuming.
         var eof: Int32 = 0
         if mpv_get_property(handle, "eof-reached", MPV_FORMAT_FLAG, &eof) >= 0, eof != 0 {
             command(["seek", "0", "absolute"])
         }
-        setRate(rate)
         var flag: Int32 = 0
         _ = mpv_set_property(handle, "pause", MPV_FORMAT_FLAG, &flag)
         cachedPaused = false
@@ -382,6 +486,7 @@ final class MPVMetalView: UIView {
 
     func pause() {
         guard let handle = mpv else { return }
+        resumeAfterBackground = false
         var flag: Int32 = 1
         _ = mpv_set_property(handle, "pause", MPV_FORMAT_FLAG, &flag)
         cachedPaused = true
@@ -401,6 +506,8 @@ final class MPVMetalView: UIView {
     func stop() {
         generation += 1
         refitTask?.cancel()
+        suspendedForBackground = false
+        resumeAfterBackground = false
         mounted = false
         if let cont = loadContinuation {
             loadContinuation = nil
@@ -410,18 +517,21 @@ final class MPVMetalView: UIView {
     }
 
     /// MPVKit's MoltenVK context reads the Metal drawable size when the video output is built.
-    /// A rotation changes the layer but does not send MPV a resize event, leaving the old portrait
-    /// viewport in the corner of the landscape drawable. Rebuilding the video output is the same
-    /// path MPVKit uses when the app returns from background and preserves the current pause state.
+    /// A rotation changes the layer but does not send MPV a resize event. Keep `contentsGravity`
+    /// centred during the rotation animation, then quickly rebuild the VO once the layout settles,
+    /// preserving the active `vid` track and guarding against teardown races.
     private func scheduleVideoRefit() {
+        guard !suspendedForBackground else { return }
         refitTask?.cancel()
         refitTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let self, self.mounted else { return }
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled, let self, !self.shuttingDown, !self.suspendedForBackground, self.mounted else { return }
             guard let handle = self.mpv else { return }
-            self.videoQueue.async {
+            let activeVid = self.getStringProperty("vid") ?? "auto"
+            self.videoQueue.async { [weak self] in
+                guard let self, !self.shuttingDown else { return }
                 _ = mpv_set_property_string(handle, "vid", "no")
-                _ = mpv_set_property_string(handle, "vid", "auto")
+                _ = mpv_set_property_string(handle, "vid", activeVid == "no" ? "auto" : activeVid)
             }
         }
     }
@@ -446,10 +556,17 @@ final class MPVMetalView: UIView {
 
     var fill: Bool = false {
         didSet {
+            hostView.setFill(fill)
             guard let handle = mpv else { return }
             var panscan: Double = fill ? 1.0 : 0.0
             _ = mpv_set_property(handle, "panscan", MPV_FORMAT_DOUBLE, &panscan)
         }
+    }
+
+    func setSharpen(_ level: Int) {
+        guard let handle = mpv else { return }
+        var amount: Double = level >= 2 ? 1.0 : (level == 1 ? 0.55 : 0.0)
+        _ = mpv_set_property(handle, "sharpen", MPV_FORMAT_DOUBLE, &amount)
     }
 
     // MARK: Tracks

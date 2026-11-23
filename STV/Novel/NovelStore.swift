@@ -117,7 +117,29 @@ final class NovelStore: ObservableObject {
         try Data(text.utf8).write(to: f, options: .atomic)
     }
 
-    func cachedCount(_ book: NovelBook) -> Int { book.chapters.indices.filter { isCached(book, $0) }.count }
+    func cachedCount(_ book: NovelBook) -> Int {
+        if !book.isWeb { return book.chapters.count }
+        migrateLegacyCache(book)
+        return Self.fastCachedCount(book)
+    }
+
+    /// Counts non-empty cached chapter files with a single directory scan instead of per-chapter SHA256 + stat().
+    nonisolated static func fastCachedCount(_ book: NovelBook) -> Int {
+        if !book.isWeb { return book.chapters.count }
+        let subdir = book.chapterURLs != nil ? "chapters" : "ch"
+        let folder = dir(book.id).appendingPathComponent(subdir)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var count = 0
+        for file in files where file.pathExtension == "txt" {
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            if size > 0 { count += 1 }
+        }
+        return min(count, book.chapters.count)
+    }
 
     func transferProgress(from old: NovelBook, to new: NovelBook) {
         guard !new.chapters.isEmpty, let progress = progress[old.id] else { return }

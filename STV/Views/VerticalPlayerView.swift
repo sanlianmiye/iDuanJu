@@ -260,11 +260,33 @@ struct PlayerScreen: View {
         .onDisappear { co.teardown(); adjuster.restoreBrightness(); OrientationGate.lockPortrait() }
         .compatOnChange(of: co.current) { new in
             scrubbing = false
-            if new != nil { flashChrome(); centerSuppressed = true } else { flashChrome() }
+            if new != nil {
+                centerSuppressed = true
+                if co.lastAdvanceWasAuto {
+                    withAnimation(.easeOut(duration: 0.2)) { showChrome = false }
+                } else {
+                    flashChrome()
+                }
+            } else {
+                flashChrome()
+            }
         }
         .compatOnChange(of: co.readyIndex) { index in
             guard index != nil else { return }
+            showLoadingSpinner = false
+            if co.lastAdvanceWasAuto { return }
             if centerSuppressed { showChrome = true; rearmAutoHide() } else { flashChrome() }
+        }
+        .task(id: "\(co.current ?? -1)|\(co.readyIndex ?? -1)|\(co.current.flatMap { co.errors[$0] } != nil)") {
+            guard let cur = co.current, co.readyIndex != cur, co.errors[cur] == nil else {
+                showLoadingSpinner = false
+                return
+            }
+            showLoadingSpinner = false
+            try? await Task.sleep(for: .milliseconds(280))
+            if !Task.isCancelled, co.current == cur, co.readyIndex != cur, co.errors[cur] == nil {
+                showLoadingSpinner = true
+            }
         }
         
         .compatOnChange(of: landscape) { l in if !l { locked = false }; panel = nil }
@@ -438,6 +460,7 @@ struct PlayerScreen: View {
         co.releaseHeldFrame()
     }
     @State private var feedSettled = true
+    @State private var showLoadingSpinner = false
 
     /// Offset of page `index` from rest, capped at one page either way.
     private func pageDrift(_ index: Int, page: CGFloat) -> CGFloat {
@@ -481,7 +504,7 @@ struct PlayerScreen: View {
                         }
                         Button("重试") { co.activate(i) }.buttonStyle(.borderedProminent)
                     }.padding(32)
-                } else if i == co.current {
+                } else if i == co.current, showLoadingSpinner {
                     ProgressView("正在载入分集").tint(.white).allowsHitTesting(false).accessibilityIdentifier("player.loading")
                 }
             }
@@ -698,6 +721,30 @@ struct PlayerScreen: View {
         Menu {
             Toggle(isOn: $showTech) { Label("技术信息", systemImage: "info.circle") }
             Toggle(isOn: Binding(get: { co.autoNext }, set: { co.autoNext = $0 })) { Label("自动连播", systemImage: "repeat") }
+            Menu {
+                ForEach([(0, "关闭"), (1, "标准"), (2, "强效")], id: \.0) { lvl, label in
+                    Button {
+                        co.enhanceLevel = lvl
+                        showOSD(lvl == 0 ? "画质增强：已关闭" : "画质增强：\(label)锐化")
+                    } label: {
+                        if co.enhanceLevel == lvl { Label(label, systemImage: "checkmark") } else { Text(label) }
+                    }
+                }
+            } label: {
+                Label("画质增强", systemImage: "sparkles")
+            }
+            Menu {
+                ForEach([(0, "关闭"), (-1, "播完本集"), (15, "15 分钟"), (30, "30 分钟"), (60, "60 分钟")], id: \.0) { mode, label in
+                    Button {
+                        co.setSleepTimer(mode) { msg in showOSD(msg) }
+                        showOSD(mode == 0 ? "定时关闭：已取消" : (mode == -1 ? "定时关闭：播完本集暂停" : "定时关闭：\(mode) 分钟后暂停"))
+                    } label: {
+                        if co.sleepMode == mode { Label(label, systemImage: "checkmark") } else { Text(label) }
+                    }
+                }
+            } label: {
+                Label("定时关闭", systemImage: "moon.zzz")
+            }
             Button { fillScreen.toggle(); showOSD(fillScreen ? "画面：铺满全屏" : "画面：完整自适应") } label: {
                 Label(fillScreen ? "完整自适应" : "铺满全屏", systemImage: fillScreen ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
             }
@@ -1241,7 +1288,10 @@ final class PlayerRenderHost: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         guard let surface = renderSurface else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         UIView.performWithoutAnimation { surface.frame = bounds; surface.layoutIfNeeded() }
+        CATransaction.commit()
     }
     #if DEBUG
     override var accessibilityValue: String? {

@@ -26,7 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -56,6 +56,8 @@ import app.iduanju.core.hongguo.HGRankSub
 import app.iduanju.core.hongguo.HGSeries
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -134,8 +136,8 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
     val c = IdjThemeColors
     // iOS HomeSource.all: [红果, 黄果, AI剧] + visible sites (采集站 / plugins) + [频道, 漫画]
     val sites = IdjApp.instance.cms.visibleSites.filterNot { it.origin.equals("TVBox", ignoreCase = true) || it.origin.startsWith("TVBox") }
-    val plugins = IdjApp.instance.plugins.visible(IdjApp.instance.cms.adultUnlocked).filter { it.type == "video" || it.type == "shortdrama" }
-    val pages: List<Any> = listOf<Any>(HomeSource.hongguo) + (if (IdjApp.instance.cms.adultUnlocked) listOf<Any>(HomeSource.huangguo) else emptyList()) + listOf<Any>(HomeSource.ai) + sites + plugins + listOf(HomeSource.channels, HomeSource.manga, HomeSource.novel)
+    val plugins = IdjApp.instance.plugins.visible(false).filter { it.type == "video" || it.type == "shortdrama" }
+    val pages: List<Any> = listOf<Any>(HomeSource.hongguo, HomeSource.ai) + sites + plugins + listOf(HomeSource.channels, HomeSource.manga, HomeSource.novel)
     val labels = pages.map { when (it) { is HomeSource -> it.label; is app.iduanju.core.cms.CMSSite -> it.name; else -> (it as app.iduanju.plugin.PluginStore.Installed).name } }
     val pager = rememberPagerState { pages.size }
     LaunchedEffect(HomeJump.label, pages.size) {
@@ -158,20 +160,29 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
     LaunchedEffect(immersive) { onImmersiveChanged(immersive) }
     DisposableEffect(Unit) { onDispose { onImmersiveChanged(false) } }
     LaunchedEffect(pager.currentPage) { feedScroll = 0f }
-    val pinned = with(androidx.compose.ui.platform.LocalDensity.current) { feedScroll > 8.dp.toPx() }
-
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val pinned by remember(density) { derivedStateOf { feedScroll > with(density) { 8.dp.toPx() } } }
+    // TV build: land initial DPAD focus on the search capsule.
     val searchFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
+
+    // Local backdrop of what sits behind the header: page colour + ambient glow. The header is a sibling drawn on top
+    // of this layer, so its search capsule gets real drawBackdrop lens refraction (LIQUID) / blur (FROSTED). The
+    // root backdrop can't be used here: this page lives inside it and would sample itself.
+    val bgColor = c.bg
+    val homeBackdrop = rememberLayerBackdrop {
+        drawRect(bgColor)
+        drawContent()
+    }
     Box(Modifier.fillMaxSize().background(c.bg)) {
-        AmbientGlow(visible = !pinned)
+        Box(Modifier.fillMaxSize().layerBackdrop(homeBackdrop)) { AmbientGlow(visible = !pinned) }
         Column(Modifier.fillMaxSize().then(if (immersive) Modifier else Modifier.statusBarsPadding())) {
             // header: search + filter capsule
             if (!immersive) Column(Modifier.dsPinned(pinned).padding(top = 6.dp)) {
                 Row(
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(46.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(c.glass)
-                        .border(1.dp, c.glassBorder, RoundedCornerShape(50)),
+                        // same glass material as the dock / detail chrome (follows 我的 → 玻璃质感)
+                        .glassSurface(RoundedCornerShape(50), backdrop = homeBackdrop, shadowRadius = 0.dp, fallbackAlpha = if (c.dark) 0.60f else 0.80f),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Row(Modifier.weight(1f).fillMaxHeight().focusRequester(searchFocus).pressClick(label = "home.search", ring = RoundedCornerShape(50)) { onSearch() }.padding(start = 16.dp),
@@ -207,24 +218,7 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                     return@HorizontalPager
                 }
                 if (s == HomeSource.channels) { app.iduanju.tg.ChannelFeedPage(onPlay); return@HorizontalPager }
-                if (s == HomeSource.ai && app.iduanju.IdjApp.instance.cms.adultUnlocked) {
-                    // iOS AI剧: 红果 AI剧 | 黄果 AI 站 (the latter only behind the adult gate)
-                    val sel = HomeSubSel.map[s.label] ?: 0
-                    Column(Modifier.fillMaxSize()) {
-                        Row(Modifier.padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("红果 AI剧", "黄果 AI 站").forEachIndexed { i, t ->
-                                val on = i == sel
-                                Box(Modifier.height(30.dp).clip(RoundedCornerShape(50)).background(if (on) c.text else c.text.copy(0.1f)).pressClick(label = t, ring = RoundedCornerShape(50)) { HomeSubSel.map[s.label] = i }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
-                                    Text(t, color = if (on) c.bg else c.text.copy(0.8f), fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
-                                }
-                            }
-                        }
-                        Box(Modifier.weight(1f)) {
-                            if (sel == 1) app.iduanju.huangguo.HuangguoFeedPage(onOpenDetail, aiOnly = true)
-                            else FeedPage(s, onOpenDetail)
-                        }
-                    }
-                } else if (s.subs().isEmpty()) {
+                if (s.subs().isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("「${s.label}」Android 版尚未移植", color = c.secondary, fontSize = 14.sp)
                     }
@@ -242,11 +236,17 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
  */
 @Composable
 private fun BlurBackdrop(url: String?, modifier: Modifier, radius: androidx.compose.ui.unit.Dp, alpha: Float) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val req = remember(url) {
+        coil.request.ImageRequest.Builder(ctx)
+            .data(url)
+            .size(48, 64)
+            .memoryCacheKey("blur:$url")
+            .build()
+    }
     if (android.os.Build.VERSION.SDK_INT >= 31) {
-        AsyncImage(url, null, modifier.blur(radius), contentScale = ContentScale.Crop, alpha = alpha)
+        AsyncImage(req, null, modifier.blur((radius / 2).coerceAtMost(12.dp)), contentScale = ContentScale.Crop, alpha = alpha)
     } else {
-        val ctx = androidx.compose.ui.platform.LocalContext.current
-        val req = remember(url) { coil.request.ImageRequest.Builder(ctx).data(url).size(16, 22).memoryCacheKey("blur:$url").build() }
         AsyncImage(req, null, modifier, contentScale = ContentScale.Crop, alpha = alpha, filterQuality = androidx.compose.ui.graphics.FilterQuality.High)
     }
 }
@@ -268,7 +268,7 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
     ModalBottomSheet(onDismiss, sheetState = state, containerColor = c.surface, dragHandle = { BottomSheetDefaults.DragHandle(color = c.text.copy(0.25f)) }) {
         Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Text("频道", color = c.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
-            Box(Modifier.align(Alignment.CenterEnd).clip(RoundedCornerShape(50)).background(c.text.copy(0.1f)).pressClick(label = "完成", ring = RoundedCornerShape(50), onClick = onDismiss).padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Box(Modifier.align(Alignment.CenterEnd).glassPill(RoundedCornerShape(50)).pressClick(label = "完成", ring = RoundedCornerShape(50), onClick = onDismiss).padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text("完成", color = c.accent, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
         }
@@ -277,7 +277,7 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
                 val subs: List<String> = when (p) {
                     is HomeSource -> when (p) {
                         HomeSource.huangguo -> listOf("视频站", "App 源")
-                        HomeSource.ai -> p.subs().map { it.subLabel } + if (app.iduanju.IdjApp.instance.cms.adultUnlocked) listOf("黄果 AI 站") else emptyList()
+                        HomeSource.ai -> p.subs().map { it.subLabel }
                         HomeSource.channels, HomeSource.manga -> emptyList()
                         else -> p.subs().map { it.subLabel }
                     }
@@ -290,7 +290,7 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
                         row.forEachIndexed { j, t ->
                             val si = subs.indexOf(t)
                             val on = pi == current && (HomeSubSel.map[labels[pi]] ?: 0) == si
-                            Box(Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(10.dp)).background(if (on) c.accent.copy(0.16f) else c.text.copy(0.07f))
+                            Box(Modifier.weight(1f).height(44.dp).glassPill(RoundedCornerShape(10.dp), selected = on)
                                     .pressClick(label = t, ring = RoundedCornerShape(10.dp)) { onPick(pi, if (p is HomeSource && p != HomeSource.huangguo) si else null) }, contentAlignment = Alignment.Center) {
                                 Text(t, color = if (on) c.accent else c.text, fontSize = 15.sp, maxLines = 1)
                             }
@@ -368,11 +368,12 @@ private fun FeedPage(source: HomeSource, onOpen: (String) -> Unit) {
             if (source == HomeSource.hongguo && cw.isNotEmpty()) ContinueRow(cw, onOpen)
             val heroIds = heroPicks.map { it.seriesId }.toSet()
             val go = app.iduanju.ui.LocalNavigate.current
+            val shelfCount = LocalLayoutMetrics.current.shelfItemCount
             boards.forEachIndexed { n, b ->
                 LaunchedEffect(b.id) { BoardCache.load(b) }
                 val items = BoardCache.items[b.id]
                 val rest = if (n == 0) items?.filter { it.seriesId !in heroIds } else items
-                HomeSection(b.title, if (BoardCache.failed.containsKey(b.id) && items == null) "加载失败，下拉重试" else null, rest?.take(12), onOpen) { go("board/${b.genre.name}/${b.sub.name}") }
+                HomeSection(b.title, if (BoardCache.failed.containsKey(b.id) && items == null) "加载失败，下拉重试" else null, rest?.take(shelfCount), onOpen) { go("board/${b.genre.name}/${b.sub.name}") }
             }
         }
     }
@@ -410,10 +411,18 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
     val buttonStyle = LocalTextStyle.current.merge(androidx.compose.ui.text.TextStyle(
         fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold,
         platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)))
+    val metrics = LocalLayoutMetrics.current
+    val scope = rememberCoroutineScope()
+    // Tablet: the hero card takes ~62 % and a 「热播速览」 stack fills the rest, so a wide window never shows one
+    // small poster in front of an empty dark gradient.
+    val withSide = metrics.tier != SizeTier.Compact && picks.size > 1
     BoxWithConstraints(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-        // Preserve the spec's 112 dp poster normally; narrow windows keep a usable info column.
-        val posterWidth = minOf(112.dp, (maxWidth - 28.dp - 14.dp - 160.dp).coerceAtLeast(80.dp))
-        val infoWidth = maxWidth - 28.dp - posterWidth - 14.dp
+        val sideGap = 14.dp
+        val heroWidth = if (withSide) (maxWidth - sideGap) * 0.62f else maxWidth
+        // Preserve the spec's 112 dp poster on phones (132 dp on tablets); narrow windows keep a usable info column.
+        val posterMax = if (metrics.tier == SizeTier.Compact) 112.dp else 132.dp
+        val posterWidth = minOf(posterMax, (heroWidth - 28.dp - 14.dp - 160.dp).coerceAtLeast(80.dp))
+        val infoWidth = heroWidth - 28.dp - posterWidth - 14.dp
         val infoPx = with(density) { infoWidth.roundToPx() }
         fun textHeight(text: String, style: androidx.compose.ui.text.TextStyle, lines: Int) = with(density) {
             measurer.measure(text, style, maxLines = lines, overflow = TextOverflow.Ellipsis,
@@ -443,7 +452,8 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
                 8.dp + footerHeight
         }.maxOrNull() ?: 149.dp
         val cardHeight = maxOf(posterWidth * 4 / 3, infoHeight) + 28.dp
-        Box(Modifier.fillMaxWidth().height(cardHeight)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(sideGap)) {
+        Box(Modifier.width(heroWidth).height(cardHeight)
             .shadow(15.dp, RoundedCornerShape(22.dp), ambientColor = Color.Black.copy(0.22f), spotColor = Color.Black.copy(0.22f))
             .clip(RoundedCornerShape(22.dp)).background(Color(0xFF241A1A))) {
             androidx.compose.animation.Crossfade(cur?.cover, label = "heroBg") { url ->
@@ -468,10 +478,13 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
                             // Explicit 48 dp hit slot; the spec's 32 dp white pill stays visually compact.
                             Box(Modifier.height(touchHeight).width(ctaWidth).testTag("home.hero.cta.$i")
                                 .pressClick(0.98f, label = ctaLabel) { onOpen(s.seriesId) }, contentAlignment = Alignment.Center) {
-                                Row(Modifier.fillMaxWidth().height(visualButtonHeight).testTag("home.hero.pill.$i").clip(CircleShape).background(Color.White).padding(horizontal = pillPadding),
+                                // Glass CTA over the blurred hero, following 我的 → 液态玻璃 / 毛玻璃.
+                                Row(Modifier.fillMaxWidth().height(visualButtonHeight).testTag("home.hero.pill.$i")
+                                    .glassSurface(CircleShape, dark = true, shadowRadius = 6.dp, fallbackAlpha = 0.70f, activeOverlay = Color.White.copy(alpha = 0.10f))
+                                    .padding(horizontal = pillPadding),
                                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(iconGap)) {
-                                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(iconSize), tint = Color(0xFF111317))
-                                    Text(ctaLabel, Modifier.weight(1f).testTag("home.hero.ctaText.$i"), color = Color(0xFF111317), style = buttonStyle, maxLines = 1, softWrap = false)
+                                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(iconSize), tint = Color.White)
+                                    Text(ctaLabel, Modifier.weight(1f).testTag("home.hero.ctaText.$i"), color = Color.White, style = buttonStyle, maxLines = 1, softWrap = false)
                                 }
                             }
                         }
@@ -493,6 +506,61 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
                 }
             }
         }
+        if (withSide) HeroSideStack(board, picks, index, Modifier.weight(1f).height(cardHeight), onOpen) { i ->
+            scope.launch { pager.animateScrollToPage(i) }
+        }
+        }
+    }
+}
+
+/**
+ * Tablet-only 「热播速览」 companion to the hero: the other picks of the same board as compact rows on the same
+ * blurred-cover material, so the hero row is balanced edge to edge. Tapping a row focuses it in the hero; the
+ * round arrow opens its detail page.
+ */
+@Composable
+private fun HeroSideStack(board: String, picks: List<HGSeries>, current: Int, modifier: Modifier, onOpen: (String) -> Unit, onFocus: (Int) -> Unit) {
+    val others = picks.indices.filter { it != current }.take(3)
+    Box(modifier
+        .shadow(15.dp, RoundedCornerShape(22.dp), ambientColor = Color.Black.copy(0.22f), spotColor = Color.Black.copy(0.22f))
+        .clip(RoundedCornerShape(22.dp)).background(Color(0xFF1E1A22))) {
+        androidx.compose.animation.Crossfade(picks.getOrNull(others.firstOrNull() ?: 0)?.cover, label = "heroSideBg") { url ->
+            BlurBackdrop(url, Modifier.fillMaxSize().scale(1.6f), 40.dp, 0.7f)
+        }
+        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color.Black.copy(0.42f), Color.Black.copy(0.70f)))))
+        Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("热播速览", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(6.dp))
+                if (board.isNotEmpty()) Text(board, color = Color.White.copy(0.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.height(6.dp))
+            Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.SpaceEvenly) {
+                others.forEach { i ->
+                    val s = picks[i]
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        .pressClick(0.98f, label = "home.hero.side.$i") { onFocus(i) }.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(36.dp, 48.dp).clip(RoundedCornerShape(7.dp)).background(Color.White.copy(0.1f))) {
+                            AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text("${i + 1}", color = Color(0xFFF2B55C), fontSize = 16.sp, fontWeight = FontWeight.Black,
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.width(18.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(s.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val meta = homeShelfMeta(s)
+                            if (meta.isNotEmpty()) Text(meta, color = Color.White.copy(0.62f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Box(Modifier.size(30.dp).clip(CircleShape).background(Color.White.copy(0.14f))
+                            .pressClick(label = "打开 ${s.title}") { onOpen(s.seriesId) }, contentAlignment = Alignment.Center) {
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = Color.White)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -507,16 +575,20 @@ fun HomeBadge(text: String, modifier: Modifier = Modifier) {
 @Composable
 private fun HomeSection(title: String, note: String?, list: List<HGSeries>?, onOpen: (String) -> Unit, onMore: () -> Unit) {
     val c = IdjThemeColors
+    val metrics = LocalLayoutMetrics.current
+    // Tablet: larger cells and up to 16 items so a 1100 dp shelf fills edge to edge instead of stopping at 60 %.
+    val cell = metrics.shelfCardWidth
+    val gap = if (metrics.tier == SizeTier.Compact) 10.dp else 14.dp
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeader2(title, note) { MoreLink(onClick = onMore) }
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (list == null) items(4) {
-                Column(Modifier.width(112.dp)) {
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(gap)) {
+            if (list == null) items(if (metrics.tier == SizeTier.Compact) 4 else 9) {
+                Column(Modifier.width(cell)) {
                     Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(12.dp)).background(c.glass))
                     Box(Modifier.padding(top = 8.dp).width(80.dp).height(12.dp).clip(RoundedCornerShape(4.dp)).background(c.glass))
                 }
             } else items(list, key = { it.seriesId }) { s ->
-                app.iduanju.ui.category.PosterCell(s, null, homeShelfMeta(s), onOpen, Modifier.width(112.dp))
+                app.iduanju.ui.category.PosterCell(s, null, homeShelfMeta(s), onOpen, Modifier.width(cell))
             }
         }
     }
@@ -552,11 +624,15 @@ fun PosterCard(s: HGSeries, onOpen: (String) -> Unit) = HomePosterCard(s, onOpen
 internal fun ContinueRow(list: List<app.iduanju.data.WatchProgress>, onOpen: (String) -> Unit, onPlay: ((app.iduanju.data.WatchProgress) -> Unit)? = null) {
     val c = IdjThemeColors
     val go = app.iduanju.ui.LocalNavigate.current
+    val metrics = LocalLayoutMetrics.current
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeader2("继续观看") { MoreLink { go("library/history") } }
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // A full shelf of recent dramas; tablets get 280 dp cards with a wider gap.
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (metrics.tier == SizeTier.Compact) 10.dp else 14.dp)) {
             items(list.take(10), key = { it.seriesId }) { p ->
-                Row(Modifier.width(296.dp).dsCard(18.dp).pressClick(0.98f, label = p.title) { onOpen(p.seriesId) }
+                Row(Modifier.width(metrics.continueCardWidth).glassSurface(RoundedCornerShape(18.dp), shadowRadius = 12.dp)
+                    .pressClick(0.98f, label = p.title) { onOpen(p.seriesId) }
                     .padding(start = 10.dp, end = 12.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Box(Modifier.size(52.dp, 69.dp).clip(RoundedCornerShape(8.dp)).background(c.glass)) {

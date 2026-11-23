@@ -38,12 +38,14 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         mask = .portrait
         refresh()
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive }) {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in
-                Task { @MainActor in
-                    // A dismissed player must not unlock a subsequent portrait-only screen.
-                    if generation == rotationGeneration { mask = .allButUpsideDown; refresh() }
-                }
-            }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+        }
+        // `requestGeometryUpdate`'s closure is an errorHandler (never called on success).
+        // Restore sensor rotation after the portrait transition settles.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 550_000_000)
+            // A dismissed player must not unlock a subsequent portrait-only screen.
+            if generation == rotationGeneration { mask = .allButUpsideDown; refresh() }
         }
     }
     @MainActor static func lockPortrait() {

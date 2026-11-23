@@ -53,6 +53,8 @@ enum HGCurrentPlayer {
         let env=n(1,100)+n(5,7)+s(6,"v04.10.03.04-bugfix")+n(7,10001)+s(14,version)
         pb += HGPlayerSign.pBytes(23,env)
         pb += s(24,#"{"cmr":16777216,"cmr2":16777216,"vpn":0,"kd":0,"dyn":"","do":0,"tk":false}"#)
+        // Primary anonymous batch endpoint requires a nonempty length-delimited field 25 (2026-11-21).
+        pb += s(25,"AAAAAAAAAAAAAAAAAAAAAAAAA")
         return pb
     }
 
