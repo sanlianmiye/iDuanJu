@@ -40,6 +40,7 @@ class IdjApp : Application(), coil.ImageLoaderFactory {
         instance = this
         settings = SettingsStore(this)
         app.iduanju.core.novel.NovelSources.configureStorage(filesDir)
+        app.iduanju.data.BuiltinSeeds.seedNovel(this)
         HGPlayerDevice.storageDir = filesDir
         app.iduanju.core.hongguo.HGNet.playerUsesSystemProxy = settings.playerUsesSystemProxy
         HGPlayerDevice.overrideProvider = {
@@ -51,6 +52,7 @@ class IdjApp : Application(), coil.ImageLoaderFactory {
         library = LibraryStore(this)
         cms = app.iduanju.data.CMSStore(this)
         tvbox = app.iduanju.tvbox.TVBoxStore(this).also { it.migrateLegacySitesIfNeeded(cms.sites) }
+        app.iduanju.data.BuiltinSeeds.seedTvBox(this, tvbox)
         plugins = app.iduanju.plugin.PluginStore(this)
         tg = app.iduanju.tg.TGStore(this)
         manga = app.iduanju.manga.MangaStore(this)
