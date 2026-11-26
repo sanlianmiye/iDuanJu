@@ -44,6 +44,9 @@ struct NovelHomeView: View {
     @State private var reading: NovelBook?
     @State private var detailBook: NovelBook?
     @State private var deleting: NovelBook?
+    @State private var editingShelf = false
+    @State private var selectedBookIDs: Set<String> = []
+    @State private var confirmBatchDelete = false
     @State private var searching = false
     @State private var managing = false
     @State private var exploring = false
@@ -69,6 +72,26 @@ struct NovelHomeView: View {
                 }
                 quickStrip.padding(.top, store.books.isEmpty ? 16 : 16)
                 shelfHeader.padding(.top, 16)
+                if editingShelf && !filteredShelf.isEmpty {
+                    let allSelected = filteredShelf.allSatisfy { selectedBookIDs.contains($0.id) }
+                    HStack {
+                        Button(allSelected ? "取消全选" : "全选 (\(filteredShelf.count))") {
+                            selectedBookIDs = allSelected ? [] : Set(filteredShelf.map(\.id))
+                        }
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                        Spacer()
+                        Button(selectedBookIDs.isEmpty ? "点击书籍勾选" : "删除所选 (\(selectedBookIDs.count))") {
+                            confirmBatchDelete = true
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(selectedBookIDs.isEmpty ? STVTheme.secondary : STVTheme.accentWarm)
+                        .disabled(selectedBookIDs.isEmpty)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(STVTheme.glassBorder) }
+                    .padding(.horizontal, 16).padding(.top, 10)
+                }
                 if store.books.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "books.vertical").font(.system(size: 30)).foregroundStyle(STVTheme.tertiary)
@@ -89,7 +112,15 @@ struct NovelHomeView: View {
                 } else {
                     LazyVGrid(columns: cols, spacing: 16) {
                         ForEach(filteredShelf) { b in
-                            Button { if b.isWeb { detailBook = b } else { reading = b } } label: { bookCell(b) }
+                            Button {
+                                if editingShelf {
+                                    if selectedBookIDs.contains(b.id) { selectedBookIDs.remove(b.id) } else { selectedBookIDs.insert(b.id) }
+                                } else if b.isWeb {
+                                    detailBook = b
+                                } else {
+                                    reading = b
+                                }
+                            } label: { bookCell(b) }
                                 .buttonStyle(PressScale(scale: 0.97))
                                 .contextMenu { Button("删除", systemImage: "trash", role: .destructive) { deleting = b } }
                                 .accessibilityIdentifier("novel.book.\(b.title)")
@@ -113,6 +144,14 @@ struct NovelHomeView: View {
         } message: { Text(errors.joined(separator: "\n")) }
         .confirmationDialog("从书架删除「\(deleting?.title ?? "")」？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             Button("删除", role: .destructive) { if let b = deleting { store.remove(b) }; deleting = nil }
+        } message: { Text("会同时删除阅读进度和本机保存的文件。") }
+        .confirmationDialog("从书架删除所选的 \(selectedBookIDs.count) 本书？", isPresented: $confirmBatchDelete, titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                let ids = selectedBookIDs
+                for b in store.books where ids.contains(b.id) { store.remove(b) }
+                selectedBookIDs = []
+                editingShelf = false
+            }
         } message: { Text("会同时删除阅读进度和本机保存的文件。") }
         .fullScreenCover(item: $reading) { b in NovelReaderView(book: store.book(b.id) ?? b) }
         .fullScreenCover(item: $detailBook) { book in
@@ -273,17 +312,32 @@ struct NovelHomeView: View {
                 ProgressView().controlSize(.small)
             } else if !store.books.isEmpty {
                 HStack(spacing: 4) {
-                    ForEach(ShelfFilter.allCases, id: \.self) { f in
-                        let on = f == filter
-                        Button { withAnimation(DS.select) { filter = f } } label: {
-                            Text(f.rawValue)
-                                .font(.system(size: 12, weight: on ? .semibold : .regular))
-                                .foregroundStyle(on ? STVTheme.accent : STVTheme.secondary)
-                                .padding(.horizontal, 9).frame(height: 24)
-                                .background(Capsule().fill(on ? STVTheme.accentSoft : .clear))
+                    if !editingShelf {
+                        ForEach(ShelfFilter.allCases, id: \.self) { f in
+                            let on = f == filter
+                            Button { withAnimation(DS.select) { filter = f } } label: {
+                                Text(f.rawValue)
+                                    .font(.system(size: 12, weight: on ? .semibold : .regular))
+                                    .foregroundStyle(on ? STVTheme.accent : STVTheme.secondary)
+                                    .padding(.horizontal, 9).frame(height: 24)
+                                    .background(Capsule().fill(on ? STVTheme.accentSoft : .clear))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
+                    Button {
+                        withAnimation(DS.select) {
+                            editingShelf.toggle()
+                            if !editingShelf { selectedBookIDs = [] }
+                        }
+                    } label: {
+                        Text(editingShelf ? "完成" : "管理")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(editingShelf ? STVTheme.accent : STVTheme.text)
+                            .padding(.horizontal, 10).frame(height: 24)
+                            .background(Capsule().fill(editingShelf ? STVTheme.accentSoft : STVTheme.glass))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -302,7 +356,17 @@ struct NovelHomeView: View {
             return b.chapters.isEmpty ? "未读" : "未读 · \(b.chapters.count) 章"
         }()
         return VStack(alignment: .leading, spacing: 0) {
-            NovelCover(book: b, corner: 9, badge: badge, progress: f).aspectRatio(0.71, contentMode: .fit)
+            ZStack(alignment: .topTrailing) {
+                NovelCover(book: b, corner: 9, badge: badge, progress: f).aspectRatio(0.71, contentMode: .fit)
+                if editingShelf {
+                    let checked = selectedBookIDs.contains(b.id)
+                    Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(checked ? STVTheme.accent : .white)
+                        .background(Circle().fill(checked ? .white : Color.black.opacity(0.45)))
+                        .padding(6)
+                }
+            }
             Text(b.title).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1).padding(.top, 7)
             Text(stat).font(.system(size: 11.5)).foregroundStyle(STVTheme.tertiary).lineLimit(1).padding(.top, 2)
         }

@@ -118,9 +118,20 @@ fun TVBoxLivePlayerScreen(
         exo.addListener(listener)
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity?.window?.let { w ->
+                androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
             exo.removeListener(listener)
             exo.release()
         }
+    }
+
+    LaunchedEffect(controlsVisible, drawerOpen) {
+        val w = activity?.window ?: return@LaunchedEffect
+        val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+        ic.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        ic.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
     }
 
     val streamUrl = currentChannel?.urls?.getOrNull(lineIdx) ?: currentChannel?.urls?.firstOrNull()

@@ -1,0 +1,51 @@
+{
+ "manifest": {
+  "schema": 1,
+  "id": "com.idj.bundled.youporn",
+  "name": "YouPorn",
+  "version": "1.0.0",
+  "author": {
+   "name": "i短剧"
+  },
+  "description": "YouPorn · HLS + MP4 多画质（需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+   "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+   "http": [
+    "www.youporn.com",
+    "youporn.com",
+    "*.youporn.com"
+   ],
+   "media": [
+    "www.youporn.com",
+    "*.youporn.com",
+    "*.ypncdn.com",
+    "*.phncdn.com"
+   ],
+   "cloudflare": true,
+   "storage": false,
+   "login": false
+  },
+  "capabilities": [
+   "home",
+   "category",
+   "search",
+   "detail",
+   "play"
+  ],
+  "settings": [],
+  "integrity": {
+   "files": {
+    "main.js": "sha256-uEhBlpXooYuqy8TSlUyUSd/cDcolNfVRWvarHRtoG4c="
+   }
+  }
+ },
+ "files": {
+  "main.js": "const BLOCKED = [\n  'underage','under age','minor ','minors','preteen','pre-teen','child','kid ','kids','loli','shota',\n  'schoolgirl','school girl','jailbait','rape','raped','forced','non-consensual','nonconsensual','non consent',\n  'drugged','unconscious','sleeping','passed out','hidden cam','hidden camera','spy cam','upskirt',\n  '未成年','幼女','萝莉','蘿莉','中学生','中學生','小学生','小學生','强奸','強姦','强暴','迷奸','迷姦','偷拍','下药','下藥'\n];\nfunction safeTitle(t) {\n  const s = ' ' + String(t || '').toLowerCase() + ' ';\n  for (let i = 0; i < BLOCKED.length; i++) if (s.indexOf(BLOCKED[i]) >= 0) return false;\n  return true;\n}\nfunction unescapeHtml(s) {\n  return String(s || '')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#0?39;/g, \"'\").replace(/&#x27;/gi, \"'\")\n    .replace(/&nbsp;/g, ' ').replace(/\\\\\\//g, '/');\n}\nfunction cleanText(s) {\n  return unescapeHtml(String(s || '').replace(/<[^>]*>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\nfunction absUrl(base, u) {\n  u = unescapeHtml(u).trim();\n  if (!u || /^(?:data|javascript|about):/i.test(u)) return '';\n  if (u.startsWith('//')) return 'https:' + u;\n  if (/^http:\\/\\//i.test(u)) return 'https://' + u.slice(7);\n  if (/^https:\\/\\//i.test(u)) return u;\n  return host.url.resolve(base.endsWith('/') ? base : base + '/', u);\n}\nfunction pageNum(p) { const n = Number(p); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1; }\nfunction balancedArray(marker, h) {\n  const idx = h.indexOf(marker);\n  if (idx < 0) return null;\n  const open = h.indexOf('[', idx + marker.length);\n  if (open < 0) return null;\n  let depth = 0, inStr = false, esc = false;\n  for (let i = open; i < h.length; i++) {\n    const c = h[i];\n    if (inStr) {\n      if (esc) esc = false;\n      else if (c === '\\\\') esc = true;\n      else if (c === '\"') inStr = false;\n    } else if (c === '\"') inStr = true;\n    else if (c === '[') depth++;\n    else if (c === ']') { depth--; if (depth === 0) return h.slice(open, i + 1); }\n  }\n  return null;\n}\nfunction fmtPage(tpl, page) {\n  const parts = tpl.split('|');\n  const s = page <= 1 ? parts[0] : (parts.length > 1 ? parts[1] : parts[0]);\n  return s.replace(/\\{p0\\}/g, String(Math.max(0, page - 1))).replace(/\\{p\\}/g, String(Math.max(1, page)));\n}\nfunction lastMonth() {\n  const d = new Date();\n  d.setUTCMonth(d.getUTCMonth() - 1);\n  const m = String(d.getUTCMonth() + 1).padStart(2, '0');\n  return d.getUTCFullYear() + '-' + m;\n}\nconst SITE = 'https://www.youporn.com';\nconst UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15';\nconst CATS = [\n  { id: 'home', name: '最新', path: '/|/?page={p}' },\n  { id: 'rated', name: '好评', path: '/top_rated/|/top_rated/?page={p}', isRank: true },\n  { id: 'viewed', name: '最多观看', path: '/most_viewed/|/most_viewed/?page={p}', isRank: true },\n];\nasync function get(path) {\n  const url = /^https?:\\/\\//i.test(path) ? path : SITE + path;\n  const res = await host.http.request({ url, headers: { 'User-Agent': UA, 'Referer': SITE + '/' }, timeout: 15000 });\n  if (res.status < 200 || res.status >= 300) throw host.error('E_HTTP', 'HTTP ' + res.status);\n  return { body: res.body, url: res.url || url };\n}\nfunction parseList(h, page) {\n  const items = [], seen = {};\n  for (const chunk of h.split('data-video-id=\"').slice(1)) {\n    const idm = chunk.match(/^(\\d+)\"/);\n    if (!idm || seen[idm[1]]) continue;\n    const card = chunk.slice(0, 12000);\n    const tm = card.match(/aria-label=\"([^\"]+)\"/i) || card.match(/\\balt=\"([^\"]+)\"/i);\n    const title = tm ? unescapeHtml(tm[1]).trim() : '';\n    if (!title || !safeTitle(title)) continue;\n    seen[idm[1]] = 1;\n    const cm = card.match(/data-poster=\"(https:\\/\\/[^\"]+)\"/i) || card.match(/data-src=\"(https:\\/\\/[^\"]+\\.(?:jpg|jpeg|webp)[^\"]*)\"/i);\n    const dm = card.match(/tm_video_duration\">\\s*(?:<span>)?\\s*([0-9:]+)/i);\n    const hm = card.match(new RegExp('href=\"(/watch/' + idm[1] + '/[^\"]*)\"', 'i'));\n    items.push({ id: hm ? hm[1] : ('/watch/' + idm[1] + '/'), title, cover: cm ? unescapeHtml(cm[1]) : '', remarks: dm ? dm[1] : '' });\n  }\n  return { items, page, hasMore: items.length > 0 && h.indexOf('page=' + (page + 1)) >= 0 };\n}\nasync function resolveAylo(html, pageUrl) {\n  const raw = balancedArray('\"mediaDefinitions\"', html);\n  if (!raw) return [];\n  const defs = JSON.parse(raw);\n  const hdr = { 'Referer': SITE + '/', 'User-Agent': UA };\n  const out = [], seen = {};\n  function add(url, fmt, height) {\n    url = absUrl(pageUrl, url);\n    if (!url.startsWith('https://') || url.indexOf('premium') >= 0 || seen[url]) return;\n    if (url.indexOf('.m3u8') < 0 && url.indexOf('.mp4') < 0) return;\n    seen[url] = 1;\n    const hls = fmt === 'hls' || url.indexOf('.m3u8') >= 0;\n    const h = Number(height) || 0;\n    out.push({ hls: hls ? 1 : 0, h, s: { name: (h > 0 ? h + 'p · ' : '自动 · ') + (hls ? 'HLS' : 'MP4'), url, format: hls ? 'hls' : 'mp4', headers: hdr } });\n  }\n  for (const d of defs) {\n    if (d.format !== 'hls' && d.format !== 'mp4') continue;\n    const u = absUrl(pageUrl, d.videoUrl || '');\n    if (!u.startsWith('https://') || u.indexOf('premium') >= 0) continue;\n    const remote = !!d.remote || (u.indexOf('.m3u8') < 0 && u.indexOf('.mp4') < 0);\n    if (!remote) { add(u, d.format, d.height); continue; }\n    try {\n      const r = await host.http.request({ url: u, headers: { 'User-Agent': UA, 'Referer': SITE + '/', 'Accept': 'application/json' }, timeout: 12000 });\n      if (r.status >= 200 && r.status < 300 && r.body) {\n        const parsed = JSON.parse(r.body);\n        const rows = Array.isArray(parsed) ? parsed : [parsed];\n        for (const row of rows) if (row && (row.format === 'hls' || row.format === 'mp4')) add(row.videoUrl, row.format, row.height);\n      }\n    } catch (_) {}\n  }\n  out.sort((a, b) => (b.hls - a.hls) || (b.h - a.h));\n  return out.map(x => x.s);\n}\nexport default {\n  async home() {\n    const r = await get(fmtPage(CATS[0].path, 1));\n    const p = parseList(r.body, 1);\n    return { categories: CATS.map(c => ({ id: c.id, name: c.name, isRank: !!c.isRank })), items: p.items, hasMore: p.hasMore };\n  },\n  async category({ id, page }) {\n    const p = pageNum(page);\n    const cat = CATS.find(c => c.id === id) || CATS[0];\n    const r = await get(fmtPage(cat.path, p));\n    return parseList(r.body, p);\n  },\n  async search({ keyword, page }) {\n    const p = pageNum(page), q = encodeURIComponent(String(keyword || '').trim());\n    const r = await get(fmtPage('/search/?query=' + q + '|/search/?query=' + q + '&page={p}', p));\n    return parseList(r.body, p);\n  },\n  async detail({ id }) {\n    const r = await get(id);\n    const tm = r.body.match(/property=\"og:title\"[^>]*content=\"([^\"]+)\"/i);\n    const om = r.body.match(/property=\"og:image\"[^>]*content=\"([^\"]+)\"/i);\n    const title = tm ? unescapeHtml(tm[1]).trim() : id;\n    return { title, cover: om ? unescapeHtml(om[1]) : '', lines: [{ name: 'YouPorn', episodes: [{ id: r.url, name: title }] }] };\n  },\n  async play({ episodeId, id }) {\n    const r = await get(episodeId || id);\n    const streams = await resolveAylo(r.body, r.url);\n    if (!streams.length) throw host.error('E_PARSE', 'YouPorn 页面里没有播放源（可能需要验证或地区受限）');\n    return { streams };\n  }\n};\n"
+ }
+}

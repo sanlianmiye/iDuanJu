@@ -37,6 +37,8 @@ actor HongguoClient {
             "HTTPProxy": "", "HTTPSProxy": "", "SOCKSProxy": ""
         ]
         playerSession = URLSession(configuration: pcfg)
+        HGProtocol.shared.load()
+        HGProtocol.shared.refreshAsync(session: session)
     }
 
     private static func vmID() -> String { String(1_000_000_000_000_000_000 + UInt64.random(in: 0..<8_000_000_000_000_000_000)) }
@@ -79,7 +81,7 @@ actor HongguoClient {
         HGPlayerDevice.queryPart() + "&ac=wifi&channel=ry_hongguo_offlinestore_04&aid=8662&app_name=novelread" +
         "&version_code=73332&version_name=7.3.3.32&device_platform=android&os=android&ssmix=a&device_type=sdk_gphone64_arm64&device_brand=google" +
         "&language=en&os_api=35&os_version=15&manifest_version_code=73332&resolution=1080*2400&dpi=420&update_version_code=73332" +
-        "&_rticket=\(rt)&&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
+        "&_rticket=\(rt)&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
         "&player_so_load=1&is_android_pad_screen=0&rom_version=sdk_gphone64_arm64-userdebug+15+AE3A.240806.043+12960925+dev-keys" +
         "&cdid=22daeba8-ef23-4742-abbe-c41bc3d6d4c8"
     }
@@ -114,7 +116,15 @@ actor HongguoClient {
         return d
     }
 
-    func resetDevice() { device = nil; HGDevice.reset() }
+    func resetDevice() {
+        device = nil
+        HGDevice.reset()
+        playerIdentity = nil
+        playerRejected.removeAll()
+        playerBlockedUntil = nil
+        HGPlayerIdentity.reset()
+        resolveCache.removeAll()
+    }
 
     /// Last automatic re-registration (soft-reject recovery). Throttle so a blocked network can't hammer device_register.
     private var lastAutoReregister: Date?
@@ -431,6 +441,53 @@ actor HongguoClient {
         throw lastErr
     }
 
+    /// Lightweight title suggestions from Hongguo's official web endpoint.
+    func suggestions(_ keyword: String, limit: Int = 10) async throws -> [HGSeries] {
+        let q = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        guard var components = URLComponents(string: Self.webOrigin + "/incent_resource/suggestion") else {
+            throw ProviderError.invalid("红果联想地址无效")
+        }
+        components.queryItems = [
+            URLQueryItem(name: "app_id", value: "8662"),
+            URLQueryItem(name: "query", value: q),
+            URLQueryItem(name: "count", value: String(min(max(limit, 1), 20)))
+        ]
+        guard let url = components.url else { throw ProviderError.invalid("红果联想地址无效") }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        request.setValue(Self.webOrigin + "/", forHTTPHeaderField: "Referer")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ProviderError.upstream("红果搜索联想请求失败")
+        }
+        let root = J.dict(try JSONSerialization.jsonObject(with: data))
+        let payload = J.dict(root["data"])
+        let records = (root["suggest_list"] as? [Any]) ?? (payload["suggest_list"] as? [Any]) ?? []
+        var seen = Set<String>()
+        var results: [HGSeries] = []
+        for value in records {
+            let record = J.dict(value)
+            guard J.str(record["word_type"]) == "short_play_name" else { continue }
+            let video = J.dict(record["video_data"])
+            var series = Self.parseVideoData(video)
+            if series.seriesId.isEmpty {
+                series.seriesId = Self.firstID(video, "series_id_str", "series_id", "album_id_str", "book_id")
+            }
+            if series.title.isEmpty {
+                series.title = J.firstNonEmpty(J.str(record["name"]), J.str(record["keyword"]))
+            }
+            guard Self.looksSID(series.seriesId), !series.title.isEmpty, !seen.contains(series.seriesId) else { continue }
+            seen.insert(series.seriesId)
+            results.append(series)
+            if results.count >= limit { break }
+        }
+        return results
+    }
+
     private static func contentFilterOf(_ vd: [String: Any]) -> HGContentFilter? {
         let det = J.dict(vd["video_detail"])
         switch J.firstPositive(vd["content_type"], det["content_type"]) {
@@ -465,27 +522,41 @@ actor HongguoClient {
         }
         let dir = await dirJ
         let landed = await landedJ
+        var webRes = await webJ
         let info = J.dict(J.dict(dir?["data"])["book_info"])
         if vd.isEmpty {
-            guard let dir else { throw ProviderError.upstream("详情获取失败") }
-            let data = J.dict(dir["data"])
-            var eps: [HGEpisode] = []
-            for (i, raw) in J.arr(data["item_data_list"]).enumerated() {
-                let m = J.dict(raw)
-                let vid = J.firstNonEmpty(J.str(m["item_id"]), J.str(m["vid"]))
-                if vid.isEmpty { continue }
-                let n = J.int(m["chapter_index"])
-                eps.append(HGEpisode(ep: n > 0 ? n : i + 1, vid: vid, duration: 0, title: J.str(m["title"])))
+            if let dir {
+                let data = J.dict(dir["data"])
+                var eps: [HGEpisode] = []
+                for (i, raw) in J.arr(data["item_data_list"]).enumerated() {
+                    let m = J.dict(raw)
+                    let vid = J.firstNonEmpty(J.str(m["item_id"]), J.str(m["vid"]))
+                    if vid.isEmpty { continue }
+                    let n = J.int(m["chapter_index"])
+                    eps.append(HGEpisode(ep: n > 0 ? n : i + 1, vid: vid, duration: 0, title: J.str(m["title"])))
+                }
+                if eps.isEmpty && webRes == nil { webRes = try? await self.webDetail(seriesId: sid) }
+                let title = J.firstNonEmpty(J.str(info["book_name"]), J.str(info["original_book_name"]), webRes?.title ?? "")
+                let cover = J.firstNonEmpty(J.str(info["thumb_url"]), webRes?.cover ?? "")
+                let total = max(J.int(info["serial_count"]), eps.count, webRes?.totalEps ?? 0)
+                if !eps.isEmpty || !title.isEmpty {
+                    let related = await self.loadRelatedSeries(seriesId: sid, title: title, cover: cover, episodeCount: total, videoData: [:], excludeId: sid, landed: landed)
+                    return Self.enrich(HGSeriesDetail(seriesId: sid, title: title,
+                                          cover: cover, desc: J.str(info["abstract"]),
+                                          author: J.str(info["author"]), actors: Self.names(info["roles"], info["role"]),
+                                          onlineTime: Int(J.unix(info["create_time"])), totalEps: total, episodes: eps,
+                                          relatedSeries: related), with: webRes)
+                }
             }
-            let title = J.firstNonEmpty(J.str(info["book_name"]), J.str(info["original_book_name"]))
-            let cover = J.str(info["thumb_url"])
-            let total = max(J.int(info["serial_count"]), eps.count)
-            let related = await self.loadRelatedSeries(seriesId: sid, title: title, cover: cover, episodeCount: total, videoData: [:], excludeId: sid, landed: landed)
-            return Self.enrich(HGSeriesDetail(seriesId: sid, title: title,
-                                  cover: J.str(info["thumb_url"]), desc: J.str(info["abstract"]),
-                                  author: J.str(info["author"]), actors: Self.names(info["roles"], info["role"]),
-                                  onlineTime: Int(J.unix(info["create_time"])), totalEps: max(J.int(info["serial_count"]), eps.count), episodes: eps,
-                                  relatedSeries: related), with: await webJ)
+            if webRes == nil { webRes = try? await self.webDetail(seriesId: sid) }
+            if let w = webRes, !w.episodes.isEmpty || !w.title.isEmpty {
+                let total = max(w.totalEps, w.episodes.count)
+                let related = await self.loadRelatedSeries(seriesId: sid, title: w.title, cover: w.cover, episodeCount: total, videoData: [:], excludeId: sid, landed: landed)
+                return Self.enrich(HGSeriesDetail(seriesId: sid, title: w.title, cover: w.cover, desc: w.intro,
+                                      author: "", actors: w.cast.map(\.name), onlineTime: w.onlineTime,
+                                      totalEps: total, episodes: w.episodes, relatedSeries: related), with: w)
+            }
+            throw ProviderError.upstream("详情获取失败")
         }
         var eps: [HGEpisode] = []
         for e in J.arr(vd["video_list"]) {
@@ -503,7 +574,7 @@ actor HongguoClient {
                               desc: J.firstNonEmpty(J.str(vd["series_intro"]), J.str(info["abstract"])),
                               author: J.firstNonEmpty(J.str(info["author"]), J.str(info["source"])), actors: actors,
                               onlineTime: Int(J.unix(info["create_time"])), totalEps: J.int(vd["episode_cnt"]), episodes: eps,
-                              relatedSeries: related), with: await webJ)
+                              relatedSeries: related), with: webRes)
     }
 
     /// DEBUG: logs how long a 红果 request took since `t0` (one line per call, for latency work).
@@ -515,7 +586,45 @@ actor HongguoClient {
         return v
     }
 
+    private static func isDirOk(_ j: [String: Any]) -> Bool {
+        let code = J.str(j["code"])
+        guard code == "0" || code.uppercased() == "SUCCESS" || J.str(j["message"]).uppercased() == "SUCCESS" else { return false }
+        let data = J.dict(j["data"])
+        return !data.isEmpty && (!J.arr(data["item_data_list"]).isEmpty || !J.dict(data["book_info"]).isEmpty)
+    }
+
     private func bookDirectory(_ sid: String) async throws -> [String: Any] {
+        var lastErr: Error = ProviderError.upstream("directory 请求失败")
+        // 1) Fast unsigned playerQuery path
+        do {
+            let now = Self.nowMs()
+            var req = URLRequest(url: URL(string: Self.urlBookDir + Self.playerQuery(now) + "&book_id=" + sid)!)
+            req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json; charset=utf-8,application/x-protobuf", forHTTPHeaderField: "Accept")
+            req.setValue("8662", forHTTPHeaderField: "x-ss-dp")
+            req.setValue(String(now), forHTTPHeaderField: "x-ss-req-ticket")
+            req.setValue(String(now / 1000), forHTTPHeaderField: "x-khronos")
+            req.setValue("2", forHTTPHeaderField: "sdk-version")
+            req.setValue("5051452", forHTTPHeaderField: "passport-sdk-version")
+            let j = try await send(req, retries: 0)
+            if Self.isDirOk(j) { return j }
+            lastErr = ProviderError.upstream("directory code=\(J.str(j["code"]))")
+        } catch {
+            lastErr = error
+            if !Self.hasPurePlayerOverride { _ = HGPlayerDevice.remint() }
+        }
+        // 2) Registered device + full 6-header HGSign fallback
+        do {
+            let d = try await ensureDevice()
+            let u = Self.urlBookDir + Self.listQuery(d, Self.nowMs()) + "&book_id=" + sid
+            let j = try await list(u, signed: true)
+            if Self.isDirOk(j) { return j }
+            lastErr = ProviderError.upstream("directory(signed) code=\(J.str(j["code"]))")
+        } catch {
+            lastErr = error
+        }
+        // 3) Brief backoff + fresh playerQuery retry
+        try await Task.sleep(nanoseconds: 500_000_000)
         let now = Self.nowMs()
         var req = URLRequest(url: URL(string: Self.urlBookDir + Self.playerQuery(now) + "&book_id=" + sid)!)
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
@@ -525,12 +634,9 @@ actor HongguoClient {
         req.setValue(String(now / 1000), forHTTPHeaderField: "x-khronos")
         req.setValue("2", forHTTPHeaderField: "sdk-version")
         req.setValue("5051452", forHTTPHeaderField: "passport-sdk-version")
-        let j = try await send(req, retries: 1)
-        let code = J.str(j["code"])
-        guard code == "0" || code.uppercased() == "SUCCESS" || J.str(j["message"]).uppercased() == "SUCCESS" else {
-            throw ProviderError.upstream("directory code=\(code)")
-        }
-        return j
+        let j = try await send(req, retries: 0)
+        if Self.isDirOk(j) { return j }
+        throw lastErr
     }
 
     // MARK: panel / category (gateway category_transport.go)
@@ -622,64 +728,261 @@ actor HongguoClient {
         return selection
     }
 
-    // MARK: resolve (resolve.go batch via postPlayerBatch → video_model.go single dialect)
+    // MARK: resolve (7.4.5.32 Medusa v5 preload/v1 + video_tab/v1 + web fallback)
+
+    private static func fallbackIdentity() -> HGPlayerIdentity {
+        HGProtocol.shared.current.fallbackIdentity ?? HGPlayerIdentity.fallbackVerified
+    }
+
+    private var preferredPreloadHost: String?
+
+    private func orderedPreloadHosts() -> [String] {
+        let hosts = HGProtocol.shared.current.preloadHosts
+        guard let first = preferredPreloadHost, hosts.contains(first) else { return hosts }
+        return [first] + hosts.filter { $0 != first }
+    }
+
+    private func v5PlayerIdentity() async throws -> HGPlayerIdentity {
+        if let override = Self.purePlayerOverride {
+            let cdid = Self.stableUUID("hongguo-player-cdid:" + override.did)
+            let openudid = HGPlayerSign.hexStr(Array(SHA256.hash(data: Data(("hongguo-player-openudid:" + override.did).utf8)).prefix(8)))
+            return HGPlayerIdentity(deviceId: override.did, iid: override.iid, cdid: cdid, openudid: openudid, registeredAt: Date().timeIntervalSince1970)
+        }
+        return try await ensurePlayerIdentity()
+    }
+
+    private static func v5BasePairs(_ id: HGPlayerIdentity) -> [(String, String)] {
+        HGProtocol.shared.current.appQuery.map { ($0.k, $0.v) } + [("iid", id.iid), ("cdid", id.cdid), ("device_id", id.deviceId)]
+    }
 
     func resolveFresh(vid: String) async throws -> HGResolvedVideo {
-        for attempt in 0..<3 {
-            try Task.checkCancellation()
-            let pairs = try await purePlayerPairs()
-            let did = pairs.first { $0.0 == "device_id" }?.1 ?? ""
+        guard !vid.isEmpty, vid.count <= 30, vid.allSatisfy(\.isNumber) else {
+            throw ProviderError.invalid("红果分集编号无效")
+        }
+        var lastErr: Error = ProviderError.upstream("没有可用播放流")
+
+        func tryIdentity(_ identity: HGPlayerIdentity) async throws -> HGResolvedVideo? {
+            let r: HGResolvedVideo
             do {
-                for level in [3, 4] {
-                    var result: HGResolvedVideo?
-                    do { result = try await resolvePure(vid, level: level, pairs: pairs) }
-                    catch is PlayerEmptyBody {
-                        for path in ["/novel/player/multi_video_model/v1", "/novel/player/multi_video_model/player/v1"] {
-                            do { result = try await resolveCurrentBatch(vid, level: level, pairs: pairs, path: path); break }
-                            catch is PlayerEmptyBody { }
-                        }
-                    }
-                    guard let r = result else { throw PlayerEmptyBody() }
-                    if r.err == Self.byteVC2Only && level == 3 { continue }
-                    return r
-                }
+                r = try await resolvePreloadV5(vid, identity: identity)
             } catch is PlayerEmptyBody {
-                // The registered 7.3.9 player dialect can be soft-rejected while the
-                // older batch dialect is still serving the same vid. Keep that path
-                // as a real fallback before throwing away the current identity.
-                for level in [3, 4] {
-                    try Task.checkCancellation()
+                if identity.registeredAt > 0, Date().timeIntervalSince1970 - identity.registeredAt < 8 {
+                    try await Task.sleep(for: .milliseconds(1500))
                     do {
-                        if let r = try await resolveBatch(vid, level: level) {
-                            if r.err == Self.byteVC2Only && level == 3 { continue }
-                            NSLog("[HG] legacy batch fallback ok level=%d streams=%d", level, r.streams.count)
-                            return r
-                        }
-                    } catch {
-                        NSLog("[HG] legacy batch fallback error level=%d: %@", level, String(describing: error))
+                        r = try await resolvePreloadV5(vid, identity: identity)
+                    } catch is PlayerEmptyBody {
+                        r = try await resolveVideoTabV5(vid, identity: identity)
+                    }
+                } else {
+                    r = try await resolveVideoTabV5(vid, identity: identity)
+                }
+            }
+            if r.err == nil, !r.streams.isEmpty { return r }
+            lastErr = ProviderError.upstream(r.err ?? "没有可用播放流")
+            return nil
+        }
+
+        try Task.checkCancellation()
+        let primary = try? await v5PlayerIdentity()
+        if let primary {
+            do {
+                if let r = try await tryIdentity(primary) { return r }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch is PlayerEmptyBody {
+                lastErr = PlayerEmptyBody()
+                if Self.purePlayerOverride == nil {
+                    playerRejected.insert(primary.deviceId)
+                    if playerIdentity?.deviceId == primary.deviceId {
+                        playerIdentity = nil
+                        HGPlayerIdentity.reset()
                     }
                 }
-                for level in [3, 4] {
-                    try Task.checkCancellation()
-                    do {
-                        let r = try await resolveSingle(vid, level: level)
-                        if r.err == Self.byteVC2Only && level == 3 { continue }
-                        NSLog("[HG] legacy single fallback ok level=%d streams=%d", level, r.streams.count)
+            } catch {
+                lastErr = error
+            }
+        }
+
+        if Self.purePlayerOverride == nil {
+            try Task.checkCancellation()
+            let secondary: HGPlayerIdentity?
+            if primary?.deviceId == Self.fallbackIdentity().deviceId {
+                secondary = try? await HGPlayerIdentity.register(session: playerSession)
+            } else {
+                secondary = Self.fallbackIdentity()
+            }
+            if let secondary, !playerRejected.contains(secondary.deviceId) {
+                do {
+                    if let r = try await tryIdentity(secondary) {
+                        playerIdentity = secondary
+                        secondary.save()
                         return r
-                    } catch {
-                        NSLog("[HG] legacy single fallback error level=%d: %@", level, String(describing: error))
                     }
-                }
-                if Self.purePlayerOverride != nil { throw PlayerEmptyBody() }
-                playerRejected.insert(did)
-                if playerIdentity?.deviceId == did { playerIdentity = nil }
-                if attempt == 2 {
-                    playerBlockedUntil = Date().addingTimeInterval(30)
-                    throw ProviderError.upstream("取流被上游空包拒绝，已尝试 3 个匿名身份，请稍后重试")
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastErr = error
                 }
             }
         }
-        throw ProviderError.upstream("没有可用播放流")
+
+        HGProtocol.shared.refreshAsync(session: session, force: true)
+        if let web = try? await resolveWebFallbackAPI(vid: vid) {
+            return web
+        }
+        if lastErr is PlayerEmptyBody {
+            throw ProviderError.upstream("取流被上游空包拒绝，请稍后重试或在「我的」重置红果设备")
+        }
+        throw lastErr
+    }
+
+    private func resolvePreloadV5(_ vid: String, identity: HGPlayerIdentity) async throws -> HGResolvedVideo {
+        let cfg = HGProtocol.shared.current
+        let rawBody = J.encodeSorted([
+            "biz_param": [
+                "detail_page_version": 0, "device_level": cfg.preloadDeviceLevel,
+                "disable_digg_stat": false, "disable_video_relate_book": false,
+                "need_all_video_definition": true, "need_mp4_align": false,
+                "use_os_player": false, "use_server_dns": false,
+                "video_platform": 1024,
+            ] as [String: Any],
+            "dr_scene": cfg.preloadDrScene,
+            "mixed_video_id_map": ["1004": [vid]],
+        ] as [String: Any])
+        let gz = Gzip.compress(rawBody)
+        let gzBytes = Array(gz)
+        let pairs = Self.v5BasePairs(identity)
+        var sawEmpty = false
+        var lastErr: Error = PlayerEmptyBody()
+        for host in orderedPreloadHosts() {
+            try Task.checkCancellation()
+            let now = try await signingMillis()
+            let signed = try HGCurrentPlayer.signPlaybackV5(pairs: pairs, nowMillis: now, body: gzBytes, includeBodyHeaders: true)
+            guard let url = URL(string: "https://\(host)\(cfg.preloadPath)?\(signed.query)") else { continue }
+            var req = URLRequest(url: url, timeoutInterval: 15)
+            req.httpMethod = "POST"
+            req.httpBody = gz
+            req.setValue("okhttp/4.12.0", forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+            for (k, v) in signed.headers { req.setValue(v, forHTTPHeaderField: k) }
+            do {
+                let (bytes, resp) = try await playerSession.data(for: req)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if status == 429 || status >= 500 {
+                    lastErr = ProviderError.upstream("preload/v1 HTTP \(status)")
+                    continue
+                }
+                guard status == 200 else { throw ProviderError.upstream("preload/v1 HTTP \(status)") }
+                if bytes.isEmpty {
+                    sawEmpty = true
+                    NSLog("[HG] preload/v1 HTTP 200 empty host=%@", host)
+                    continue
+                }
+                let j = try J.parse(bytes)
+                for code in [j["code"], J.dict(j["BaseResp"])["StatusCode"]] where code != nil {
+                    guard J.str(code) == "0" else {
+                        throw ProviderError.upstream("preload/v1 code=\(J.str(code)) \(J.str(j["message"]))")
+                    }
+                }
+                let data = J.dict(j["data"])
+                let entries = (data["1004"] as? [String: Any]) ?? data
+                guard let model = Self.videoModelJSON(J.dict(entries[vid])["video_model"]) else {
+                    throw ProviderError.upstream("preload/v1 缺少请求的分集")
+                }
+                preferredPreloadHost = host
+                return try await materialize(model, vid: vid)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastErr = error
+            }
+        }
+        if sawEmpty { throw PlayerEmptyBody() }
+        throw lastErr
+    }
+
+    private func resolveVideoTabV5(_ vid: String, identity: HGPlayerIdentity) async throws -> HGResolvedVideo {
+        let cfg = HGProtocol.shared.current
+        let pairs = Self.v5BasePairs(identity) + [
+            ("video_id", vid), ("video_id_type", "0"), ("device_level", String(cfg.tabDeviceLevel)),
+            ("need_all_video_definition", "1"), ("need_mp4_align", "0"), ("use_os_player", "0"),
+            ("video_platform", "1024"), ("source", "0"), ("from_video_id", ""),
+        ]
+        let videoTabUA = "com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
+        var sawEmpty = false
+        var lastErr: Error = PlayerEmptyBody()
+        for host in cfg.tabHosts {
+            try Task.checkCancellation()
+            let now = try await signingMillis()
+            let signed = try HGCurrentPlayer.signPlaybackV5(pairs: pairs, nowMillis: now, body: [], includeBodyHeaders: false)
+            guard let url = URL(string: "https://\(host)\(cfg.tabPath)?\(signed.query)") else { continue }
+            var req = URLRequest(url: url, timeoutInterval: 15)
+            req.httpMethod = "GET"
+            req.setValue(videoTabUA, forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Accept")
+            req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+            for (k, v) in signed.headers { req.setValue(v, forHTTPHeaderField: k) }
+            do {
+                let (bytes, resp) = try await playerSession.data(for: req)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200 else {
+                    lastErr = ProviderError.upstream("video_tab HTTP \(status)")
+                    continue
+                }
+                if bytes.isEmpty {
+                    sawEmpty = true
+                    NSLog("[HG] video_tab HTTP 200 empty host=%@", host)
+                    continue
+                }
+                let j = try J.parse(bytes)
+                for code in [j["code"], J.dict(j["BaseResp"])["StatusCode"]] where code != nil {
+                    guard J.str(code) == "0" else {
+                        throw ProviderError.upstream("video_tab code=\(J.str(code)) \(J.str(j["message"]))")
+                    }
+                }
+                let data = J.dict(j["data"])
+                let bucket = (data["video_model_data"] as? [String: Any]) ?? (data["1004"] as? [String: Any]) ?? data
+                guard let model = Self.videoModelJSON(J.dict(bucket[vid])["video_model"]) else {
+                    throw ProviderError.upstream("video_tab 缺少请求的分集")
+                }
+                return try await materialize(model, vid: vid)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastErr = error
+            }
+        }
+        if sawEmpty { throw PlayerEmptyBody() }
+        throw lastErr
+    }
+
+    func resolveWebFallbackAPI(vid: String) async throws -> HGResolvedVideo {
+        guard let url = URL(string: "https://hongguoduanju.com/api/video/protected/fallback-play-info") else {
+            throw ProviderError.invalid("红果网页接口")
+        }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.httpMethod = "POST"
+        req.httpBody = J.encodeSorted(["item_id": vid, "force_refresh": false] as [String: Any])
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("https://hongguoduanju.com", forHTTPHeaderField: "Origin")
+        req.setValue("https://hongguoduanju.com/", forHTTPHeaderField: "Referer")
+        let (data, resp) = try await playerSession.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else {
+            throw ProviderError.upstream("网页备用播放接口不可用")
+        }
+        let j = try J.parse(data)
+        let d = J.dict(j["data"]).isEmpty ? j : J.dict(j["data"])
+        let rawURL = J.firstNonEmpty(J.str(d["play_url"]), J.str(d["main_url"]), J.str(d["url"]))
+        guard let media = URL(string: rawURL), ["http", "https"].contains(media.scheme) else {
+            throw ProviderError.upstream("网页备用播放地址无效")
+        }
+        let quality = J.str(d["definition"]).isEmpty ? "360p" : J.str(d["definition"])
+        let stream = HGStream(streamId: "web-\(vid)", quality: quality, url: media.absoluteString, key: "", kind: .mp4Clear)
+        return HGResolvedVideo(vid: vid, url: media.absoluteString, key: nil, duration: J.double(d["duration"]),
+                               expiresAt: J.int(d["expire_time"]), err: nil, streams: [stream], note: "web")
     }
 
     /// Pure video_model at level 3 then 4. An empty body at level 3 means the device is rejected, so level 4 is
@@ -750,6 +1053,13 @@ actor HongguoClient {
         if let saved = HGPlayerIdentity.load(), saved.isUsable, !playerRejected.contains(saved.deviceId), saved.deviceId != failedID {
             playerIdentity = saved
             return saved
+        }
+        if HGProtocol.shared.current.preferFallbackIdentity {
+            let fb = Self.fallbackIdentity()
+            if fb.isUsable, !playerRejected.contains(fb.deviceId), fb.deviceId != failedID {
+                playerIdentity = fb
+                return fb
+            }
         }
         if let task = playerRegistering { return try await task.value }
         if let until = playerBlockedUntil, Date() < until { throw ProviderError.upstream("播放器设备注册冷却中，请稍后重试") }
@@ -1445,6 +1755,7 @@ enum HGContentFilter: String, CaseIterable, Identifiable {
 
 struct HGWebDetail: Hashable {
     var title = ""
+    var cover = ""
     var intro = ""
     var tags: [String] = []
     var cast: [HGCelebrity] = []
@@ -1454,23 +1765,37 @@ struct HGWebDetail: Hashable {
     var rating: Double = 0
     var ratingCount = ""
     var hotText = ""
+    var totalEps = 0
+    var onlineTime = 0
+    var episodes: [HGEpisode] = []
 }
 
 extension HongguoClient {
     private static let webOrigin = "https://hongguoduanju.com"
     private static let webUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    /// `https://hongguoduanju.com/player/{sid}` embeds `_ROUTER_DATA` with celebrities (ids + avatars + roles), tags, intro.
+    /// `https://hongguoduanju.com/player/{sid}` embeds `_ROUTER_DATA` with celebrities (ids + avatars + roles), tags, intro, and `vid_list`.
     func webDetail(seriesId sid: String) async throws -> HGWebDetail {
         guard Self.looksSID(sid) else { throw ProviderError.invalid("seriesId") }
         var req = URLRequest(url: URL(string: Self.webOrigin + "/player/" + sid)!)
-        req.timeoutInterval = 7
+        req.timeoutInterval = 10
         req.setValue(Self.webUA, forHTTPHeaderField: "User-Agent")
         req.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         req.setValue(Self.webOrigin + "/", forHTTPHeaderField: "Referer")
-        let (data, _) = try await session.data(for: req)
-        let html = String(decoding: data, as: UTF8.self)
+        var html = ""
+        var lastErr: Error = ProviderError.upstream("官网请求失败")
+        for attempt in 0...1 {
+            if attempt > 0 { try await Task.sleep(nanoseconds: 300_000_000) }
+            do {
+                let (data, resp) = try await session.data(for: req)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                guard (200..<300).contains(code) else { throw ProviderError.upstream("官网 HTTP \(code)") }
+                html = String(decoding: data, as: UTF8.self)
+                if !html.isEmpty { break }
+            } catch { lastErr = error }
+        }
+        guard !html.isEmpty else { throw lastErr }
         guard let router = Self.routerData(html) else { throw ProviderError.upstream("官网页面缺少 _ROUTER_DATA") }
         let ld = J.dict(router["loaderData"])
         let page = J.dict(ld["player_(series_id)/page"] ?? ld["player_(series_id)/(vid)/page"] ?? ld["detail_page"])
@@ -1478,10 +1803,19 @@ extension HongguoClient {
         guard J.str(sd["series_id"]) == sid else { throw ProviderError.upstream("官网返回的剧集不一致") }
         var w = HGWebDetail()
         w.title = J.str(sd["series_name"])
+        w.cover = J.str(sd["series_cover"])
         w.intro = J.str(sd["series_intro"]).trimmingCharacters(in: .whitespacesAndNewlines)
         w.tags = J.arr(sd["tags"]).map { J.str($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         w.episodeLabel = J.str(sd["episode_right_text"]).trimmingCharacters(in: .whitespaces)
         w.seriesGroupId = J.str(J.dict(sd["season_info"])["series_group_id"])
+        w.onlineTime = Int(J.unix(sd["first_visible_time"]))
+        var vids: [HGEpisode] = []
+        for (idx, raw) in J.arr(sd["vid_list"]).enumerated() {
+            let vid = J.str(raw).trimmingCharacters(in: .whitespaces)
+            if Self.looksSID(vid) { vids.append(HGEpisode(ep: idx + 1, vid: vid, duration: 0, title: "第\(idx + 1)集")) }
+        }
+        w.episodes = vids
+        w.totalEps = max(J.int(sd["episode_cnt"]), J.int(J.dict(sd["series_episode_info"])["episode_total_cnt"]), vids.count)
         var seen = Set<String>()
         for e in J.arr(sd["celebrities"]) {
             let m = J.dict(e)
@@ -1529,22 +1863,25 @@ extension HongguoClient {
     /// Merge web-page metadata into an app-side detail (cast with ids, tags, favorites).
     static func enrich(_ d: HGSeriesDetail, with w: HGWebDetail?) -> HGSeriesDetail {
         guard let w else { return d }
-        var out = d
-        out.cast = w.cast
-        out.tags = w.tags
-        out.favoriteCount = w.favoriteCount
-        out.episodeLabel = w.episodeLabel
-        if out.desc.isEmpty { out.desc = w.intro }
-        if !w.cast.isEmpty {
-            // Real performer names beat role names from book_info.roles.
-            out = HGSeriesDetail(source: d.source, seriesId: d.seriesId, title: d.title.isEmpty ? w.title : d.title, cover: d.cover,
-                                 desc: out.desc, author: d.author, actors: w.cast.map(\.name), onlineTime: d.onlineTime,
-                                 totalEps: d.totalEps, episodes: d.episodes, relatedSeries: d.relatedSeries,
-                                 cast: w.cast, tags: w.tags, favoriteCount: w.favoriteCount, episodeLabel: w.episodeLabel)
-        }
-        out.rating = w.rating
-        out.ratingCount = w.ratingCount
-        out.hotText = w.hotText
+        let nextTitle = d.title.isEmpty ? w.title : d.title
+        let nextCover = d.cover.isEmpty ? w.cover : d.cover
+        let nextDesc = d.desc.isEmpty ? w.intro : d.desc
+        let nextActors = !w.cast.isEmpty ? w.cast.map(\.name) : d.actors
+        let nextEps = (d.episodes.isEmpty && !w.episodes.isEmpty) ? w.episodes : d.episodes
+        let nextTotal = max(d.totalEps, w.totalEps, nextEps.count)
+        let nextOnline = d.onlineTime == 0 ? w.onlineTime : d.onlineTime
+        var out = HGSeriesDetail(
+            source: d.source, seriesId: d.seriesId, title: nextTitle, cover: nextCover,
+            desc: nextDesc, author: d.author, actors: nextActors, onlineTime: nextOnline,
+            totalEps: nextTotal, episodes: nextEps, relatedSeries: d.relatedSeries,
+            cast: !w.cast.isEmpty ? w.cast : d.cast,
+            tags: !w.tags.isEmpty ? w.tags : d.tags,
+            favoriteCount: w.favoriteCount > 0 ? w.favoriteCount : d.favoriteCount,
+            episodeLabel: w.episodeLabel.isEmpty ? d.episodeLabel : w.episodeLabel
+        )
+        out.rating = w.rating > 0 ? w.rating : d.rating
+        out.ratingCount = w.ratingCount.isEmpty ? d.ratingCount : w.ratingCount
+        out.hotText = w.hotText.isEmpty ? d.hotText : w.hotText
         return out
     }
 

@@ -136,10 +136,13 @@ fun TVBoxVodPlayerScreen(
         } else {
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+    }
+
+    LaunchedEffect(fullscreen, controlsVisible) {
         activity?.window?.let { w ->
             val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
             ic.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            if (fullscreen) {
+            if (fullscreen || !controlsVisible) {
                 ic.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
             } else {
                 ic.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())

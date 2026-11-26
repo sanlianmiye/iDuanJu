@@ -29,7 +29,9 @@ class PluginImageFetcher(private val ref: String, private val options: Options) 
         var bytes: ByteArray? = null
         for (hop in 0..5) {
             check(url)
-            val b = okhttp3.Request.Builder().url(url).header("User-Agent", "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36")
+            val b = okhttp3.Request.Builder().url(url)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+                .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
             r.headers.forEach { (k, v) -> if (k.lowercase() in app.iduanju.core.plugin.PluginOut.allowedHeaders) b.header(k, v) }
             http.newCall(b.build()).execute().use { resp ->
                 if (resp.isRedirect) { url = resp.header("Location")?.let { url.resolve(it) } ?: error("跳转地址无效"); return@use }

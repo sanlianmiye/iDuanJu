@@ -109,16 +109,28 @@ enum NetGuard {
     /// Test hook: host → addresses.
     nonisolated(unsafe) static var resolverOverride: ((String) -> [String])?
 
+    private static func isIPv6ULA(_ s: String) -> Bool {
+        var v6 = in6_addr()
+        guard inet_pton(AF_INET6, s, &v6) == 1 else { return false }
+        let b0 = withUnsafeBytes(of: v6) { $0[0] }
+        return (b0 & 0xfe) == 0xfc
+    }
+
     /// True when any address the host resolves to is in a blocked range. Blocking call (plugin thread).
     static func resolvesToBlocked(_ host: String) -> Bool {
         let h = host.lowercased()
         if h == "localhost" || h.hasSuffix(".localhost") || h.hasSuffix(".local") { return true }
         cacheLock.lock()
-        if let (t, v) = cache[h], Date().timeIntervalSince(t) < 300 { cacheLock.unlock(); return v }
+        if let (t, v) = cache[h], !v, Date().timeIntervalSince(t) < 300 { cacheLock.unlock(); return false }
         cacheLock.unlock()
         let addrs = resolverOverride?(h) ?? resolve(h)
-        let blocked = addrs.contains(where: isBlockedIP)
-        cacheLock.lock(); cache[h] = (Date(), blocked); cacheLock.unlock()
+        let hasAllowed = addrs.contains { !isBlockedIP($0) }
+        // Proxy Fake-IP (Clash / sing-box) often returns a 198.18.x.x IPv4 paired with an fc00::/18 IPv6;
+        // do not block the whole host for the companion Fake-IPv6 when an allowed address is present.
+        let blocked = addrs.contains { isBlockedIP($0) && !(hasAllowed && isIPv6ULA($0)) }
+        if !blocked && !addrs.isEmpty {
+            cacheLock.lock(); cache[h] = (Date(), false); cacheLock.unlock()
+        }
         return blocked
     }
 

@@ -191,11 +191,14 @@ struct TVBoxLivePlayerView: View {
         .background(Color.black.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
         .onAppear {
+            StatusBarGate.shared.setHidden(true, animated: false)
             OrientationGate.enterLandscape()
             channelIdx = max(0, startChannelIndex)
         }
         .onDisappear {
+            StatusBarGate.shared.setHidden(false)
             player.stop()
             OrientationGate.lockPortrait()
         }

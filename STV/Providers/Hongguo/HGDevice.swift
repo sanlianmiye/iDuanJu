@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import CommonCrypto
 
 /// Port of hongguo/device.go: anonymous device_register, persisted on-device (Application Support).
 struct HGDevice: Codable {
@@ -84,27 +86,45 @@ struct HGDevice: Codable {
     }
 }
 
-/// Player-only identity. Search registration stays in `HGDevice`; playback must use the same
-/// 7.3.9.32 / Xiaomi profile carried by the pure video_model request.
+/// Player-only V5 identity (`tt-data=a` applog v7.4.x + persisted reuse across sessions).
+/// Search registration stays in `HGDevice`; playback uses a persisted anonymous V5 device
+/// and only rotates if upstream soft-rejects or the user resets devices in Profile.
 struct HGPlayerIdentity: Codable {
     var deviceId: String
     var iid: String
     var cdid: String
     var openudid: String
     var registeredAt: Double
-    static let profile = "73932-xiaomi-23127PN0CC"
-    static let maxAge: TimeInterval = 7 * 60
-    var isUsable: Bool { !deviceId.isEmpty && !iid.isEmpty && !cdid.isEmpty && !openudid.isEmpty && Date().timeIntervalSince1970 - registeredAt < Self.maxAge }
+    static let profile = "74532-redmi-25053RT47C"
+    static let fallbackVerified = HGPlayerIdentity(
+        deviceId: "1624456208323876",
+        iid: "1624456208327972",
+        cdid: "91d56f7e-c027-4ce9-9a3c-229d59a13c3b",
+        openudid: "56a962410c494bba",
+        registeredAt: 0
+    )
+    static let v5RegisterUA = "com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
+    static let kdfSalt: [UInt8] = Bytes.fromHex("4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58")!
+    private static let registerURLs = [
+        "https://log5-applog-lf.fqnovel.com/service/2/device_register/?tt_data=a&cronet_version=8d40f833_2026-03-03&ttnet_version=4.2.243.31-douyin&use_store_region_cookie=1",
+        "https://log5-applog-hl.fqnovel.com/service/2/device_register/?tt_data=a&cronet_version=8d40f833_2026-03-03&ttnet_version=4.2.243.31-douyin&use_store_region_cookie=1",
+    ]
+
+    var isUsable: Bool {
+        !deviceId.isEmpty && !iid.isEmpty && !cdid.isEmpty && !openudid.isEmpty
+    }
 
     private static var fileURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("hongguo_player_registered_device.json")
+        return dir.appendingPathComponent("hongguo_player_v5_device.json")
     }
 
     static func load() -> HGPlayerIdentity? {
         for url in [fileURL, URL(fileURLWithPath: fileURL.path + ".bak")] {
-            guard let data = try? Data(contentsOf: url), let id = try? JSONDecoder().decode(HGPlayerIdentity.self, from: data), id.isUsable else { continue }
+            guard let data = try? Data(contentsOf: url),
+                  let id = try? JSONDecoder().decode(HGPlayerIdentity.self, from: data),
+                  id.isUsable else { continue }
             return id
         }
         return nil
@@ -112,11 +132,105 @@ struct HGPlayerIdentity: Codable {
 
     func save() {
         guard let data = try? JSONEncoder().encode(self) else { return }
-        if let old = try? Data(contentsOf: Self.fileURL) { try? old.write(to: URL(fileURLWithPath: Self.fileURL.path + ".bak"), options: .atomic) }
+        if let old = try? Data(contentsOf: Self.fileURL) {
+            try? old.write(to: URL(fileURLWithPath: Self.fileURL.path + ".bak"), options: .atomic)
+        }
         try? data.write(to: Self.fileURL, options: .atomic)
     }
 
+    static func reset() {
+        try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: fileURL.path + ".bak"))
+    }
+
+    static func ttEncrypt(_ jsonData: Data) throws -> Data {
+        let compressed = Gzip.compress(jsonData)
+        let random = Bytes.random(32)
+        let rHash = Array(SHA512.hash(data: Data(random)))
+        let derived = Array(SHA512.hash(data: Data(rHash + kdfSalt)))
+        let key = Array(derived[0..<16])
+        let iv = Array(derived[16..<32])
+        let compHash = Array(SHA512.hash(data: compressed))
+        let plain = compHash + Array(compressed)
+        var out = [UInt8](repeating: 0, count: plain.count + kCCBlockSizeAES128)
+        var moved = 0
+        let status = CCCrypt(
+            CCOperation(kCCEncrypt),
+            CCAlgorithm(kCCAlgorithmAES),
+            CCOptions(kCCOptionPKCS7Padding),
+            key, key.count,
+            iv,
+            plain, plain.count,
+            &out, out.count,
+            &moved
+        )
+        guard status == kCCSuccess else { throw ProviderError.invalid("tt-data 加密失败：\(status)") }
+        var wire = Data([0x74, 0x63, 0x05, 0x10, 0x00, 0x00])
+        wire.append(contentsOf: random)
+        wire.append(contentsOf: out[0..<moved])
+        return wire
+    }
+
     static func register(session: URLSession) async throws -> HGPlayerIdentity {
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let cdid = HGDevice.uuid4(), openudid = Bytes.hex(Bytes.random(8))
+        let header: [String: Any] = [
+            "display_name": "红果免费短剧", "update_version_code": 74332, "manifest_version_code": 74332,
+            "app_version_minor": "7.4.3.32", "aid": 8662, "channel": "update_64", "package": "com.phoenix.read",
+            "app_version": "7.4.3.32", "version_code": 74332, "sdk_version": "3.7.0-rc.34-fanqie-xiaoshuo",
+            "sdk_target_version": 29, "git_hash": "3a88f4e", "os": "Android", "os_version": "16", "os_api": 36,
+            "device_model": "25053RT47C", "device_brand": "Redmi", "device_manufacturer": "Redmi",
+            "cpu_abi": "arm64-v8a", "release_build": "b5e187f", "density_dpi": 520, "display_density": "mdpi",
+            "resolution": "1280x2772", "language": "zh", "timezone": 8, "access": "wifi", "not_request_sender": 0,
+            "carrier": "CHINA MOBILE", "mcc_mnc": "46000", "rom": "eng.root.20231116.160340",
+            "rom_version": "W528JS release-keys", "cdid": cdid,
+            "sig_hash": "56a962410c494bbaf0b58dba20cae56f", "openudid": openudid,
+            "clientudid": HGDevice.uuid4(), "ipv6_list": [String](), "region": "CN", "tz_name": "Asia/Shanghai",
+            "tz_offset": 28800, "sim_region": "cn", "sim_serial_number": [String](), "oaid_may_support": false,
+            "req_id": HGDevice.uuid4(), "device_platform": "android",
+            "custom": ["account_region_src": "fallback", "account_region": "cn", "host_bit": 64, "dragon_device_type": "phone"] as [String: Any],
+            "pre_installed_channel": "", "apk_first_install_time": nowMs, "is_system_app": 0, "sdk_flavor": "china", "guest_mode": 0,
+        ]
+        let payload = J.encodeSorted(["magic_tag": "ss_app_log", "header": header, "_gen_time": nowMs] as [String: Any])
+        if let wire = try? ttEncrypt(payload) {
+            let stub = Bytes.hex(Bytes.md5(Array(wire))).uppercased()
+            for rawURL in registerURLs {
+                guard let url = URL(string: rawURL) else { continue }
+                var req = URLRequest(url: url, timeoutInterval: 10)
+                req.httpMethod = "POST"
+                req.httpBody = wire
+                req.setValue(v5RegisterUA, forHTTPHeaderField: "User-Agent")
+                req.setValue("application/json", forHTTPHeaderField: "Accept")
+                req.setValue("application/octet-stream;tt-data=a", forHTTPHeaderField: "Content-Type")
+                req.setValue("gzip", forHTTPHeaderField: "log-encode-type")
+                req.setValue("8662", forHTTPHeaderField: "x-ss-dp")
+                req.setValue(String(nowMs), forHTTPHeaderField: "x-ss-req-ticket")
+                req.setValue("4.0.3.cn", forHTTPHeaderField: "x-vc-bdturing-sdk-version")
+                req.setValue("101", forHTTPHeaderField: "lc")
+                req.setValue("2", forHTTPHeaderField: "sdk-version")
+                req.setValue("5051452", forHTTPHeaderField: "passport-sdk-version")
+                req.setValue("-8|50:51:59:30:40:47:49:39", forHTTPHeaderField: "x-neptune")
+                req.setValue(stub, forHTTPHeaderField: "x-ss-stub")
+                guard let (data, resp) = try? await session.data(for: req),
+                      (resp as? HTTPURLResponse)?.statusCode == 200,
+                      !data.isEmpty,
+                      let j = try? J.parse(data),
+                      J.int(j["code"] ?? j["Code"]) == 0 else { continue }
+                let did = J.firstNonEmpty(J.str(j["device_id_str"]), J.str(j["device_id"]))
+                var iid = J.firstNonEmpty(J.str(j["install_id_str"]), J.str(j["install_id"]))
+                if iid.isEmpty || iid == "0" { iid = J.str(j["iid"]) }
+                if !did.isEmpty, did != "0", did.allSatisfy(\.isNumber),
+                   !iid.isEmpty, iid != "0", iid.allSatisfy(\.isNumber) {
+                    let id = HGPlayerIdentity(deviceId: did, iid: iid, cdid: cdid, openudid: openudid, registeredAt: Date().timeIntervalSince1970)
+                    id.save()
+                    return id
+                }
+            }
+        }
+        return try await registerLegacy(session: session)
+    }
+
+    private static func registerLegacy(session: URLSession) async throws -> HGPlayerIdentity {
         let cdid = HGDevice.uuid4(), openudid = Bytes.hex(Bytes.random(8))
         let query = "aid=8662&app_name=novelread&version_code=73932&version_name=7.3.9.32&device_platform=android&os=android&ssmix=a" +
             "&language=zh&channel=xiaomi_8662_64&device_type=23127PN0CC&device_brand=Xiaomi&resolution=1200*2670&dpi=460" +

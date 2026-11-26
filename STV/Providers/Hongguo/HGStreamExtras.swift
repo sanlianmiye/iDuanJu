@@ -22,35 +22,33 @@ extension HongguoClient {
     func resolve(seriesId: String, vid: String) async throws -> HGResolvedVideo {
         if let hit = cachedResolve(vid), hit.note != "web" { return hit }
         if cachedResolve(vid)?.note == "web" { resolveCache[vid] = nil }
+        var lastError: Error?
         do {
-            let signed = try await withThrowingTaskGroup(of: HGResolvedVideo.self) { group in
-                group.addTask { try await self.resolve(vid: vid) }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 3_000_000_000)
-                    throw SignedResolveTimeout()
-                }
-                defer { group.cancelAll() }
-                return try await group.next()!
-            }
+            let signed = try await resolve(vid: vid)
             if !signed.streams.isEmpty { return signed }
+            lastError = ProviderError.upstream(signed.err ?? "没有可用播放流")
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            lastError = error
             NSLog("[HG] signed resolve unavailable, using web fallback vid=%@ error=%@", vid, String(describing: error))
         }
         if let web = try? await resolveWeb(seriesId: seriesId, vid: vid) {
             resolveCache[vid] = (web, Date())
             return web
         }
-        return try await resolve(vid: vid)
+        throw lastError ?? ProviderError.upstream("没有可用播放流")
     }
 
     private func resolveWeb(seriesId: String, vid: String) async throws -> HGResolvedVideo {
-        guard Self.looksSID(seriesId), Self.looksSID(vid) else { throw ProviderError.invalid("红果分集编号") }
-        guard let pageURL = URL(string: Self.webPlayerOrigin + seriesId + "/" + vid) else {
+        guard Self.looksSID(vid) else { throw ProviderError.invalid("红果分集编号") }
+        if let api = try? await resolveWebFallbackAPI(vid: vid), !api.streams.isEmpty {
+            return api
+        }
+        guard Self.looksSID(seriesId), let pageURL = URL(string: Self.webPlayerOrigin + seriesId + "/" + vid) else {
             throw ProviderError.invalid("红果网页地址")
         }
-        var request = URLRequest(url: pageURL, timeoutInterval: 12)
+        var request = URLRequest(url: pageURL, timeoutInterval: 10)
         request.setValue(Self.webPlayerUA, forHTTPHeaderField: "User-Agent")
         request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
         let (data, response) = try await Self.webSession.data(for: request)
@@ -115,36 +113,62 @@ extension HongguoClient {
 
     // MARK: fallback_api / key_seed
 
-    /// Inline video_list → parse directly (unchanged path). Otherwise follow `fallback_api` like parseEntryPlayInfo.
+    /// Inline video_list with decodable renditions → return directly; otherwise negotiate compatible H.264/HEVC via `fallback_api` (`codec_type=1/3`).
     func materialize(_ vm: [String: Any], vid: String) async throws -> HGResolvedVideo {
         let seed = Self.keySeed(vm)
-        if Self.hasInlineList(vm) { return Self.parseVideoModel(vm, vid: vid, keySeed: seed) }
+        let inlineResult = Self.hasInlineList(vm) ? Self.parseVideoModel(vm, vid: vid, keySeed: seed) : nil
+        if let inlineResult, !inlineResult.streams.isEmpty { return inlineResult }
+
         let fb = Self.fallbackAPI(vm["fallback_api"])
-        guard !fb.isEmpty else { return Self.parseVideoModel(vm, vid: vid, keySeed: seed) }
-        guard let u = URL(string: fb), let host = u.host?.lowercased(), u.scheme == "https" || u.scheme == "http",
-              ["fqnovel.com", "snssdk.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) else {
+        guard !fb.isEmpty else { return inlineResult ?? Self.parseVideoModel(vm, vid: vid, keySeed: seed) }
+        guard let baseComponents = URLComponents(string: fb),
+              let host = baseComponents.host?.lowercased(),
+              baseComponents.scheme == "https" || baseComponents.scheme == "http",
+              ["fqnovel.com", "snssdk.com", "bytedanceapi.com", "byteimg.com", "pstatp.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) else {
             throw ProviderError.upstream("fallback_api 地址不受信任")
         }
-        var req = URLRequest(url: u)
-        req.timeoutInterval = 15
-        req.setValue(Self.videoModelUA, forHTTPHeaderField: "User-Agent")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, resp) = try await playerSession.data(for: req)
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200, !data.isEmpty else { throw ProviderError.upstream("fallback_api HTTP \(status) 空响应") }
-        let outer = try J.parse(data)
-        let vi = J.dict(outer["video_info"])
-        for c in [outer["code"] ?? outer["Code"], vi["code"] ?? vi["Code"]] where c != nil {
-            if J.int(c) != 0 { throw ProviderError.upstream("fallback_api 暂未提供本集播放信息 code=\(J.str(c))") }
+
+        var candidateURLs: [URL] = []
+        for codec in ["1", "3"] {
+            var comps = baseComponents
+            var items = (comps.queryItems ?? []).filter { $0.name != "codec_type" }
+            items.append(URLQueryItem(name: "codec_type", value: codec))
+            comps.queryItems = items
+            if let u = comps.url, !candidateURLs.contains(u) { candidateURLs.append(u) }
         }
-        var info = J.dict(vi["data"])
-        guard !info.isEmpty else { throw ProviderError.upstream("fallback_api 未返回片源模型") }
-        if info["video_duration"] == nil { info["video_duration"] = vm["video_duration"] }
-        if info["url_expire"] == nil { info["url_expire"] = vm["url_expire"] }
-        var r = Self.parseVideoModel(info, vid: vid, keySeed: Self.keySeed(info) ?? seed)
-        r.note = "fallback_api"
-        NSLog("[HG] fallback_api followed vid=%@ streams=%d", vid, r.streams.count)
-        return r
+        if let orig = baseComponents.url, !candidateURLs.contains(orig) { candidateURLs.append(orig) }
+
+        var lastFallback = inlineResult
+        for target in candidateURLs {
+            var req = URLRequest(url: target, timeoutInterval: 15)
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            do {
+                let (data, resp) = try await playerSession.data(for: req)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200, !data.isEmpty else { continue }
+                let outer = try J.parse(data)
+                let vi = J.dict(outer["video_info"])
+                var badCode = false
+                for c in [outer["code"] ?? outer["Code"], vi["code"] ?? vi["Code"]] where c != nil {
+                    if J.int(c) != 0 { badCode = true; break }
+                }
+                if badCode { continue }
+                var info = J.dict(vi["data"])
+                guard !info.isEmpty else { continue }
+                if info["video_duration"] == nil { info["video_duration"] = vm["video_duration"] }
+                if info["url_expire"] == nil { info["url_expire"] = vm["url_expire"] }
+                var r = Self.parseVideoModel(info, vid: vid, keySeed: Self.keySeed(info) ?? seed)
+                lastFallback = r
+                if !r.streams.isEmpty {
+                    r.note = "fallback_api"
+                    NSLog("[HG] fallback_api followed vid=%@ streams=%d", vid, r.streams.count)
+                    return r
+                }
+            } catch {
+                continue
+            }
+        }
+        return lastFallback ?? Self.parseVideoModel(vm, vid: vid, keySeed: seed)
     }
 
     static func hasInlineList(_ vm: [String: Any]) -> Bool {

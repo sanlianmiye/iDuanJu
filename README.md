@@ -33,6 +33,10 @@
 
 请前往 [Releases 页面](https://github.com/my-name-is-alan/iDuanJu/releases) 下载（iOS 提供未签名 IPA，需自签或巨魔安装；Android 提供已签名 APK）。
 
+## 交流群
+
+使用问题、反馈与新版本通知：[Telegram 交流群](https://t.me/iduanjuapp)
+
 ## 免责声明
 
 - 本项目仅供个人学习与技术研究使用，**不提供、不存储、不分发**任何视频、音频、图片、小说或漫画内容。

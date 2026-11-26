@@ -52,12 +52,27 @@ enum CoverCrypto {
 /// Disk+memory cache of decrypted cover images. Shared by all poster views.
 actor CoverStore {
     static let shared = CoverStore()
-    private let memory: NSCache<NSString, UIImage> = {
+    private nonisolated let memory: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.totalCostLimit = 48 * 1024 * 1024
         cache.countLimit = 120
         return cache
     }()
+
+    /// Synchronous thread-safe memory lookup so views (e.g. detail hero backdrop) render on frame 0 without flashing a placeholder.
+    nonisolated func cachedImage(url raw: String, fallback: String? = nil, maxPixelSize: Int? = nil) -> UIImage? {
+        for candidate in [raw, fallback ?? ""] {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if let maxPixelSize, let hit = memory.object(forKey: "\(trimmed)|px\(maxPixelSize)" as NSString) {
+                return hit
+            }
+            if let hit = memory.object(forKey: trimmed as NSString) {
+                return hit
+            }
+        }
+        return nil
+    }
     private var inflight: [String: Task<UIImage, Error>] = [:]
     private var inflightData: [String: Task<Data, Error>] = [:]
     private let session: URLSession = {
@@ -121,6 +136,7 @@ actor CoverStore {
            let up = URL(string: "https" + url.dropFirst(4)) { u = up }
         let cacheKey = maxPixelSize.map { "\(url)|px\($0)" } ?? url
         if let img = memory.object(forKey: cacheKey as NSString) { return img }
+        if maxPixelSize != nil, let img = memory.object(forKey: url as NSString) { return img }
         // Store one raw file on disk per URL so requesting a downsampled hero reuses disk without re-downloading.
         let diskKey = Bytes.hex(Bytes.md5(url))
         let disk = diskDir.appendingPathComponent(diskKey + ".img")
@@ -196,8 +212,29 @@ struct CoverView: View {
     var fallback: String? = nil
     /// When set, the cover is one accessibility element with this id and value loaded / failed / loading.
     var a11yID: String? = nil
+    /// Set `false` for ambient/blurred backdrops so a cold load never flashes a bright shimmer bar.
+    var showPlaceholder: Bool = true
     @State private var image: UIImage?
     @State private var failed = false
+
+    init(
+        url: String,
+        headers: [String: String] = [:],
+        corner: CGFloat = 14,
+        maxPixelSize: Int? = nil,
+        fallback: String? = nil,
+        a11yID: String? = nil,
+        showPlaceholder: Bool = true
+    ) {
+        self.url = url
+        self.headers = headers
+        self.corner = corner
+        self.maxPixelSize = maxPixelSize
+        self.fallback = fallback
+        self.a11yID = a11yID
+        self.showPlaceholder = showPlaceholder
+        _image = State(initialValue: CoverStore.shared.cachedImage(url: url, fallback: fallback, maxPixelSize: maxPixelSize))
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -210,11 +247,11 @@ struct CoverView: View {
                         .frame(width: geo.size.width, height: geo.size.height)
                         .clipped()
                         .contentShape(Rectangle())
-                } else if failed {
+                } else if failed && showPlaceholder {
                     LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.02)],
                                    startPoint: .topLeading, endPoint: .bottomTrailing)
                     Image(systemName: "film").font(.title2).foregroundStyle(.white.opacity(0.25))
-                } else {
+                } else if showPlaceholder {
                     ShimmerBlock()
                 }
             }
@@ -224,7 +261,11 @@ struct CoverView: View {
         }
         .modifier(CoverA11y(id: a11yID, state: image != nil ? "loaded" : failed ? "failed" : "loading"))
         .task(id: url + "|" + (fallback ?? "")) {
-            image = nil; failed = false
+            failed = false
+            if let hit = CoverStore.shared.cachedImage(url: url, fallback: fallback, maxPixelSize: maxPixelSize) {
+                image = hit
+                return
+            }
             var tried = Set<String>()
             for u in [url, fallback ?? ""] where !u.isEmpty && tried.insert(u).inserted {
                 do {

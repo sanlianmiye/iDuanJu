@@ -32,9 +32,17 @@ class PrefsMap(ctx: Context) : AbstractMutableMap<String, String>() {
 
 /** Coil/OkHttp interceptor: decodes 黄果 obfuscated covers (iOS CoverStore + CoverCrypto). */
 object CoverDecryptInterceptor : Interceptor {
+    private const val BROWSER_UA =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
     override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
-        val r = chain.proceed(chain.request())
-        val kind = CoverCrypto.kind(chain.request().url.toString())
+        val orig = chain.request()
+        val req = orig.newBuilder().apply {
+            if (orig.header("User-Agent").isNullOrEmpty()) header("User-Agent", BROWSER_UA)
+            if (orig.header("Accept").isNullOrEmpty()) header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+        }.build()
+        val r = chain.proceed(req)
+        val kind = CoverCrypto.kind(req.url.toString())
         if (kind == CoverCrypto.Kind.plain || !r.isSuccessful) return r
         val body = r.body ?: return r
         val bytes = runCatching { CoverCrypto.decrypt(body.bytes(), kind) }.getOrElse { return r.newBuilder().code(502).body(ByteArray(0).toResponseBody()).build() }

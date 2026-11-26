@@ -20,7 +20,7 @@ extension DramaSource {
     /// After a Cloudflare pass this is the verify WebView's own `navigator.userAgent` (cf_clearance is bound to it).
     var userAgent: String { SiteUA.learned(self) ?? (self == .missav ? MissAVProvider.userAgent : isTube ? TubeFmt.desktopUA : SiteHTTP.userAgent) }
     /// Mainstream tube sites (desktop pages carry the HLS master).
-    var isTube: Bool { [.eporner, .xvideos, .xnxx, .pornhub].contains(self) }
+    var isTube: Bool { [.eporner, .xvideos, .xnxx, .pornhub, .youporn, .redtube, .hqporner].contains(self) }
     /// MissAV exposes resolutions of one stream (画质); the others expose alternative servers (播放源).
     var streamSectionTitle: String { self == .missav ? "画质" : "播放源" }
     var siteHost: String {
@@ -35,6 +35,9 @@ extension DramaSource {
         case .xvideos: "xvideos.com"
         case .xnxx: "xnxx.com"
         case .pornhub: "pornhub.com"
+        case .youporn: "youporn.com"
+        case .redtube: "redtube.com"
+        case .hqporner: "hqporner.com"
         case .telegram: "t.me"
         default:
             if let p = pluginID { PluginStore.snapshot(p)?.manifest.httpDomains.first ?? p }
@@ -63,7 +66,7 @@ protocol SiteProvider: Sendable {
 }
 
 enum Sites {
-    static let builtinSites: [DramaSource] = [.jable, .missav, .hanime1, .supjav, .eporner, .xvideos, .xnxx, .pornhub]
+    static let builtinSites: [DramaSource] = [.jable, .missav, .hanime1, .supjav, .eporner, .xvideos, .xnxx, .pornhub, .youporn, .redtube, .hqporner]
     /// Built-in sites + enabled video plugins + 采集站.
     static var all: [DramaSource] { builtinSites + PluginStore.videoSources() + CMSStore.sources() }
     static func provider(_ s: DramaSource) -> SiteProvider? {
@@ -78,6 +81,9 @@ enum Sites {
         case .eporner: p = EpornerProvider()
         case .xvideos, .xnxx: p = XVProvider(source: s)
         case .pornhub: p = PornhubProvider()
+        case .youporn: p = YouPornProvider()
+        case .redtube: p = RedTubeProvider()
+        case .hqporner: p = HQPornerProvider()
         case .telegram: p = TGVideoProvider()
         default: p = nil
         }

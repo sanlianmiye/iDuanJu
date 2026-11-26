@@ -1,0 +1,50 @@
+{
+ "manifest": {
+  "schema": 1,
+  "id": "com.idj.bundled.xvideos",
+  "name": "XVideos",
+  "version": "1.0.0",
+  "author": {
+   "name": "i短剧"
+  },
+  "description": "XVideos · HLS 自适应 + MP4（需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+   "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+   "http": [
+    "www.xvideos.com",
+    "xvideos.com",
+    "*.xvideos.com"
+   ],
+   "media": [
+    "www.xvideos.com",
+    "*.xvideos.com",
+    "*.xvideos-cdn.com"
+   ],
+   "cloudflare": false,
+   "storage": false,
+   "login": false
+  },
+  "capabilities": [
+   "home",
+   "category",
+   "search",
+   "detail",
+   "play"
+  ],
+  "settings": [],
+  "integrity": {
+   "files": {
+    "main.js": "sha256-1qgLX+RLkFLGYsHbNa76s433dmvjMxgsEc4lYCOTvWI="
+   }
+  }
+ },
+ "files": {
+  "main.js": "const BLOCKED = [\n  'underage','under age','minor ','minors','preteen','pre-teen','child','kid ','kids','loli','shota',\n  'schoolgirl','school girl','jailbait','rape','raped','forced','non-consensual','nonconsensual','non consent',\n  'drugged','unconscious','sleeping','passed out','hidden cam','hidden camera','spy cam','upskirt',\n  '未成年','幼女','萝莉','蘿莉','中学生','中學生','小学生','小學生','强奸','強姦','强暴','迷奸','迷姦','偷拍','下药','下藥'\n];\nfunction safeTitle(t) {\n  const s = ' ' + String(t || '').toLowerCase() + ' ';\n  for (let i = 0; i < BLOCKED.length; i++) if (s.indexOf(BLOCKED[i]) >= 0) return false;\n  return true;\n}\nfunction unescapeHtml(s) {\n  return String(s || '')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#0?39;/g, \"'\").replace(/&#x27;/gi, \"'\")\n    .replace(/&nbsp;/g, ' ').replace(/\\\\\\//g, '/');\n}\nfunction cleanText(s) {\n  return unescapeHtml(String(s || '').replace(/<[^>]*>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\nfunction absUrl(base, u) {\n  u = unescapeHtml(u).trim();\n  if (!u || /^(?:data|javascript|about):/i.test(u)) return '';\n  if (u.startsWith('//')) return 'https:' + u;\n  if (/^http:\\/\\//i.test(u)) return 'https://' + u.slice(7);\n  if (/^https:\\/\\//i.test(u)) return u;\n  return host.url.resolve(base.endsWith('/') ? base : base + '/', u);\n}\nfunction pageNum(p) { const n = Number(p); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1; }\nfunction balancedArray(marker, h) {\n  const idx = h.indexOf(marker);\n  if (idx < 0) return null;\n  const open = h.indexOf('[', idx + marker.length);\n  if (open < 0) return null;\n  let depth = 0, inStr = false, esc = false;\n  for (let i = open; i < h.length; i++) {\n    const c = h[i];\n    if (inStr) {\n      if (esc) esc = false;\n      else if (c === '\\\\') esc = true;\n      else if (c === '\"') inStr = false;\n    } else if (c === '\"') inStr = true;\n    else if (c === '[') depth++;\n    else if (c === ']') { depth--; if (depth === 0) return h.slice(open, i + 1); }\n  }\n  return null;\n}\nfunction fmtPage(tpl, page) {\n  const parts = tpl.split('|');\n  const s = page <= 1 ? parts[0] : (parts.length > 1 ? parts[1] : parts[0]);\n  return s.replace(/\\{p0\\}/g, String(Math.max(0, page - 1))).replace(/\\{p\\}/g, String(Math.max(1, page)));\n}\nfunction lastMonth() {\n  const d = new Date();\n  d.setUTCMonth(d.getUTCMonth() - 1);\n  const m = String(d.getUTCMonth() + 1).padStart(2, '0');\n  return d.getUTCFullYear() + '-' + m;\n}\nconst SITE = 'https://www.xvideos.com';\nconst UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15';\nfunction cats() {\n  const m = lastMonth();\n  return [\n    { id: 'new', name: '最新', path: '/|/new/{p0}' },\n    { id: 'best', name: '上月最佳', path: '/best/' + m + '|/best/' + m + '/{p0}', isRank: true },\n  ];\n}\nasync function get(path) {\n  const url = /^https?:\\/\\//i.test(path) ? path : SITE + path;\n  const res = await host.http.request({ url, headers: { 'User-Agent': UA, 'Referer': SITE + '/' }, timeout: 15000 });\n  if (res.status < 200 || res.status >= 300) throw host.error('E_HTTP', 'HTTP ' + res.status);\n  return { body: res.body, url: res.url || url };\n}\nfunction parseList(h, page) {\n  const items = [], seen = {};\n  for (const chunk of h.split('thumb-block').slice(1)) {\n    const card = chunk.slice(0, 5000);\n    const lm = card.match(/href=\"(\\/video[.-]([a-z0-9]+)\\/[^\"]*)\"/i);\n    if (!lm || seen[lm[2]]) continue;\n    const tm = card.match(/<p class=\"title\">\\s*<a[^>]*title=\"([^\"]+)\"/i) || card.match(/\\balt=\"([^\"]+)\"/i) || card.match(/<a[^>]*href=\"\\/video[.-][a-z0-9]+\\/[^\"]*\"[^>]*\\btitle=\"([^\"]+)\"/i);\n    const title = tm ? unescapeHtml(tm[1]).trim() : '';\n    if (!title || !safeTitle(title)) continue;\n    seen[lm[2]] = 1;\n    const cm = card.match(/data-src=\"(https:\\/\\/[^\"]+\\.jpg[^\"]*)\"/i);\n    const dm = card.match(/class=\"duration\">([^<]+)</i);\n    items.push({ id: lm[1], title, cover: cm ? cm[1] : '', remarks: dm ? cleanText(dm[1]) : '' });\n  }\n  return { items, page, hasMore: items.length > 0 };\n}\nfunction h5(fn, h) {\n  const m = h.match(new RegExp('html5player\\\\.' + fn + \"\\\\('([^']*)'\\\\)\"));\n  return m ? unescapeHtml(m[1]) : '';\n}\nexport default {\n  async home() {\n    const cs = cats();\n    const r = await get(fmtPage(cs[0].path, 1));\n    const p = parseList(r.body, 1);\n    return { categories: cs.map(c => ({ id: c.id, name: c.name, isRank: !!c.isRank })), items: p.items, hasMore: p.hasMore };\n  },\n  async category({ id, page }) {\n    const p = pageNum(page), cs = cats();\n    const cat = cs.find(c => c.id === id) || cs[0];\n    const r = await get(fmtPage(cat.path, p));\n    return parseList(r.body, p);\n  },\n  async search({ keyword, page }) {\n    const p = pageNum(page), q = encodeURIComponent(String(keyword || '').trim());\n    const r = await get(fmtPage('/?k=' + q + '|/?k=' + q + '&p={p0}', p));\n    return parseList(r.body, p);\n  },\n  async detail({ id }) {\n    const r = await get(id);\n    const title = h5('setVideoTitle', r.body) || id;\n    const cover = h5('setThumbUrl169', r.body) || (r.body.match(/property=\"og:image\"[^>]*content=\"([^\"]+)\"/i) || [])[1] || '';\n    return { title, cover, lines: [{ name: 'XVideos', episodes: [{ id: r.url, name: title }] }] };\n  },\n  async play({ episodeId, id }) {\n    const r = await get(episodeId || id);\n    const hdr = { 'Referer': r.url, 'User-Agent': UA };\n    const streams = [], seen = {};\n    const hls = h5('setVideoHLS', r.body);\n    if (hls.startsWith('https://')) { seen[hls] = 1; streams.push({ name: '自动 · HLS', url: hls, format: 'hls', headers: hdr }); }\n    for (const [fn, q] of [['setVideoUrlHigh', '高清 MP4'], ['setVideoUrlLow', '标清 MP4']]) {\n      const u = h5(fn, r.body);\n      if (u.startsWith('https://') && !seen[u]) { seen[u] = 1; streams.push({ name: q, url: u, format: 'mp4', headers: hdr }); }\n    }\n    if (!streams.length) throw host.error('E_PARSE', 'XVideos 页面里没有播放地址');\n    return { streams };\n  }\n};\n"
+ }
+}

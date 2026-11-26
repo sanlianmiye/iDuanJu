@@ -1,0 +1,54 @@
+{
+ "manifest": {
+  "schema": 1,
+  "id": "com.idj.bundled.jable",
+  "name": "Jable",
+  "version": "1.0.0",
+  "author": {
+   "name": "i短剧"
+  },
+  "description": "Jable.TV · HLS 直连（镜像 jable.tv / fs1.app）",
+  "type": "video",
+  "adult": true,
+  "language": [
+   "zh"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+   "http": [
+    "jable.tv",
+    "*.jable.tv",
+    "fs1.app",
+    "*.fs1.app"
+   ],
+   "media": [
+    "jable.tv",
+    "*.jable.tv",
+    "fs1.app",
+    "*.fs1.app",
+    "*.mushroomtrack.com",
+    "*.cdn.jable.tv"
+   ],
+   "cloudflare": true,
+   "storage": false,
+   "login": false
+  },
+  "capabilities": [
+   "home",
+   "category",
+   "search",
+   "detail",
+   "play"
+  ],
+  "settings": [],
+  "integrity": {
+   "files": {
+    "main.js": "sha256-Xl8CZ/NMmri7GB7BdZDTyhb1TSCTbS/jSb43wAOW3EE="
+   }
+  }
+ },
+ "files": {
+  "main.js": "const BLOCKED = [\n  'underage','under age','minor ','minors','preteen','pre-teen','child','kid ','kids','loli','shota',\n  'schoolgirl','school girl','jailbait','rape','raped','forced','non-consensual','nonconsensual','non consent',\n  'drugged','unconscious','sleeping','passed out','hidden cam','hidden camera','spy cam','upskirt',\n  '未成年','幼女','萝莉','蘿莉','中学生','中學生','小学生','小學生','强奸','強姦','强暴','迷奸','迷姦','偷拍','下药','下藥'\n];\nfunction safeTitle(t) {\n  const s = ' ' + String(t || '').toLowerCase() + ' ';\n  for (let i = 0; i < BLOCKED.length; i++) if (s.indexOf(BLOCKED[i]) >= 0) return false;\n  return true;\n}\nfunction unescapeHtml(s) {\n  return String(s || '')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#0?39;/g, \"'\").replace(/&#x27;/gi, \"'\")\n    .replace(/&nbsp;/g, ' ').replace(/\\\\\\//g, '/');\n}\nfunction cleanText(s) {\n  return unescapeHtml(String(s || '').replace(/<[^>]*>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\nfunction absUrl(base, u) {\n  u = unescapeHtml(u).trim();\n  if (!u || /^(?:data|javascript|about):/i.test(u)) return '';\n  if (u.startsWith('//')) return 'https:' + u;\n  if (/^http:\\/\\//i.test(u)) return 'https://' + u.slice(7);\n  if (/^https:\\/\\//i.test(u)) return u;\n  return host.url.resolve(base.endsWith('/') ? base : base + '/', u);\n}\nfunction pageNum(p) { const n = Number(p); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1; }\nfunction balancedArray(marker, h) {\n  const idx = h.indexOf(marker);\n  if (idx < 0) return null;\n  const open = h.indexOf('[', idx + marker.length);\n  if (open < 0) return null;\n  let depth = 0, inStr = false, esc = false;\n  for (let i = open; i < h.length; i++) {\n    const c = h[i];\n    if (inStr) {\n      if (esc) esc = false;\n      else if (c === '\\\\') esc = true;\n      else if (c === '\"') inStr = false;\n    } else if (c === '\"') inStr = true;\n    else if (c === '[') depth++;\n    else if (c === ']') { depth--; if (depth === 0) return h.slice(open, i + 1); }\n  }\n  return null;\n}\nfunction fmtPage(tpl, page) {\n  const parts = tpl.split('|');\n  const s = page <= 1 ? parts[0] : (parts.length > 1 ? parts[1] : parts[0]);\n  return s.replace(/\\{p0\\}/g, String(Math.max(0, page - 1))).replace(/\\{p\\}/g, String(Math.max(1, page)));\n}\nfunction lastMonth() {\n  const d = new Date();\n  d.setUTCMonth(d.getUTCMonth() - 1);\n  const m = String(d.getUTCMonth() + 1).padStart(2, '0');\n  return d.getUTCFullYear() + '-' + m;\n}\nconst MIRRORS = ['https://jable.tv', 'https://fs1.app'];\nconst UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';\nconst CATS = [\n  { id: 'latest', name: '最近更新', path: '/latest-updates/' },\n  { id: 'new', name: '新片上架', path: '/new-release/' },\n  { id: 'hot-today', name: '今日热门', path: '/hot/?sort_by=video_viewed_today', isRank: true },\n  { id: 'hot-week', name: '本周热门', path: '/hot/?sort_by=video_viewed_week', isRank: true },\n  { id: 'hot-month', name: '本月热门', path: '/hot/?sort_by=video_viewed_month', isRank: true },\n  { id: 'hot', name: '热门总榜', path: '/hot/', isRank: true },\n  { id: 'zh-sub', name: '中文字幕', path: '/categories/chinese-subtitle/' },\n  { id: 'uncensored', name: '无码', path: '/categories/uncensored/' },\n];\nlet activeMirror = MIRRORS[0];\n\nasync function getPage(path) {\n  const order = [activeMirror].concat(MIRRORS.filter(m => m !== activeMirror));\n  let lastErr = null;\n  for (const base of order) {\n    try {\n      const url = /^https?:\\/\\//i.test(path) ? path : base + path;\n      const res = await host.http.request({ url, headers: { 'User-Agent': UA, 'Referer': base + '/', 'Accept-Language': 'zh-CN,zh;q=0.9' }, timeout: 15000 });\n      if (res.status >= 200 && res.status < 300 && res.body) { activeMirror = base; return { body: res.body, base, url: res.url || url }; }\n      lastErr = host.error('E_HTTP', 'HTTP ' + res.status);\n    } catch (e) { lastErr = e; }\n  }\n  throw lastErr || host.error('E_NETWORK', 'Jable 所有镜像均不可达');\n}\nfunction pagePath(path, p) { return p > 1 ? path + (path.indexOf('?') >= 0 ? '&' : '?') + 'from=' + p : path; }\nfunction parseList(h, base, page) {\n  const items = [], seen = {};\n  const re = /<div class=\"video-img-box[^\"]*\">([\\s\\S]*?)<p class=\"sub-title\">([\\s\\S]*?)<\\/p>/gi;\n  let m;\n  while ((m = re.exec(h)) !== null) {\n    const block = m[1];\n    const link = block.match(/href=\"([^\"]*\\/videos\\/([^/\"]+)\\/?)\"/i);\n    if (!link || seen[link[2]]) continue;\n    seen[link[2]] = 1;\n    const tm = block.match(/<h6[^>]*>([\\s\\S]*?)<\\/h6>/i);\n    const title = tm ? cleanText(tm[1]) : link[2].toUpperCase();\n    if (!safeTitle(title)) continue;\n    const cm = block.match(/data-src=\"([^\"]+)\"/i) || block.match(/\\ssrc=\"(https?:[^\"]+)\"/i);\n    const dm = block.match(/<span class=\"label\">([^<]+)<\\/span>/i);\n    items.push({ id: link[2], title: title || link[2].toUpperCase(), cover: cm ? absUrl(base, cm[1]) : '', remarks: dm ? cleanText(dm[1]) : '' });\n  }\n  let maxFrom = 0;\n  const fr = /from(?:_videos)?[:=]0*(\\d+)/gi;\n  while ((m = fr.exec(h)) !== null) { const n = parseInt(m[1], 10); if (n > maxFrom) maxFrom = n; }\n  return { items, page, hasMore: items.length > 0 && maxFrom > page };\n}\nexport default {\n  async home() {\n    const r = await getPage(CATS[0].path);\n    const p = parseList(r.body, r.base, 1);\n    return { categories: CATS.map(c => ({ id: c.id, name: c.name, isRank: !!c.isRank })), items: p.items, hasMore: p.hasMore };\n  },\n  async category({ id, page }) {\n    const p = pageNum(page);\n    const cat = CATS.find(c => c.id === id) || CATS[0];\n    const r = await getPage(pagePath(cat.path, p));\n    return parseList(r.body, r.base, p);\n  },\n  async search({ keyword, page }) {\n    const p = pageNum(page);\n    const r = await getPage(pagePath('/search/?q=' + encodeURIComponent(String(keyword || '').trim()), p));\n    return parseList(r.body, r.base, p);\n  },\n  async detail({ id }) {\n    const r = await getPage('/videos/' + encodeURIComponent(id) + '/');\n    const h = r.body;\n    const tm = h.match(/<h4[^>]*>([\\s\\S]*?)<\\/h4>/i) || h.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);\n    const title = tm ? cleanText(tm[1]) : id;\n    const og = h.match(/property=\"og:image\"[^>]*content=\"([^\"]+)\"/i);\n    const tags = [], tre = /<a class=\"tag[^\"]*\" href=\"[^\"]*\\/tags\\/[^\"]*\">([^<]+)<\\/a>/gi;\n    let m; while ((m = tre.exec(h)) !== null && tags.length < 16) tags.push(cleanText(m[1]));\n    return { title, cover: og ? absUrl(r.base, og[1]) : '', tags, lines: [{ name: 'Jable', episodes: [{ id, name: title }] }] };\n  },\n  async play({ episodeId, id }) {\n    const vid = episodeId || id;\n    const r = await getPage('/videos/' + encodeURIComponent(vid) + '/');\n    const m = r.body.match(/hlsUrl\\s*=\\s*['\"]([^'\"]+\\.m3u8[^'\"]*)['\"]/i);\n    if (!m) throw host.error('E_PARSE', 'Jable 页面里没有找到 hlsUrl');\n    return { streams: [{ name: 'HLS', url: m[1], format: 'hls', headers: { 'Referer': r.base + '/', 'Origin': r.base, 'User-Agent': UA } }] };\n  }\n};\n"
+ }
+}

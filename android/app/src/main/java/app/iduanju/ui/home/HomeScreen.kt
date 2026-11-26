@@ -135,9 +135,11 @@ fun formatCount(n: Long) = HomeFmt.count(n)
 fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay: (String) -> Unit = {}, onOpenManga: (String) -> Unit = {}, onImmersiveChanged: (Boolean) -> Unit = {}) {
     val c = IdjThemeColors
     // iOS HomeSource.all: [红果, 黄果, AI剧] + visible sites (采集站 / plugins) + [频道, 漫画]
+    val adult = IdjApp.instance.cms.adultUnlocked
     val sites = IdjApp.instance.cms.visibleSites.filterNot { it.origin.equals("TVBox", ignoreCase = true) || it.origin.startsWith("TVBox") }
-    val plugins = IdjApp.instance.plugins.visible(false).filter { it.type == "video" || it.type == "shortdrama" }
-    val pages: List<Any> = listOf<Any>(HomeSource.hongguo, HomeSource.ai) + sites + plugins + listOf(HomeSource.channels, HomeSource.manga, HomeSource.novel)
+    val plugins = IdjApp.instance.plugins.visible(adult).filter { it.type == "video" || it.type == "shortdrama" }
+    val baseSources: List<Any> = if (adult) listOf(HomeSource.hongguo, HomeSource.huangguo, HomeSource.ai) else listOf(HomeSource.hongguo, HomeSource.ai)
+    val pages: List<Any> = baseSources + sites + plugins + listOf(HomeSource.channels, HomeSource.manga, HomeSource.novel)
     val labels = pages.map { when (it) { is HomeSource -> it.label; is app.iduanju.core.cms.CMSSite -> it.name; else -> (it as app.iduanju.plugin.PluginStore.Installed).name } }
     val pager = rememberPagerState { pages.size }
     LaunchedEffect(HomeJump.label, pages.size) {
@@ -207,7 +209,7 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                 }
             }
             HorizontalPager(pager, Modifier.fillMaxSize().nestedScroll(feedScrollConnection), userScrollEnabled = !immersive, beyondViewportPageCount = 0) { page ->
-                val any = pages[page]
+                val any = pages.getOrElse(page) { pages.first() }
                 if (any is app.iduanju.core.cms.CMSSite) { SiteFeedPage(any, onOpenDetail); return@HorizontalPager }
                 if (any is app.iduanju.plugin.PluginStore.Installed) { PluginFeedPage(any, onOpenDetail); return@HorizontalPager }
                 val s = any as HomeSource
@@ -218,6 +220,25 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                     return@HorizontalPager
                 }
                 if (s == HomeSource.channels) { app.iduanju.tg.ChannelFeedPage(onPlay); return@HorizontalPager }
+                if (s == HomeSource.ai && adult) {
+                    // iOS AI剧: 红果 AI剧 | 黄果 AI 站 (the latter only behind the adult gate)
+                    val aiTabs = listOf("红果 AI剧", "黄果 AI 站")
+                    val sel = (HomeSubSel.map[s.label] ?: 0).coerceIn(0, 1)
+                    Column(Modifier.fillMaxSize()) {
+                        SegmentedTabs(
+                            items = aiTabs,
+                            selected = aiTabs[sel],
+                            label = { it },
+                            onSelect = { HomeSubSel.map[s.label] = aiTabs.indexOf(it) },
+                            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp),
+                        )
+                        Box(Modifier.weight(1f)) {
+                            if (sel == 1) app.iduanju.huangguo.HuangguoFeedPage(onOpenDetail, aiOnly = true)
+                            else FeedPage(s, onOpenDetail)
+                        }
+                    }
+                    return@HorizontalPager
+                }
                 if (s.subs().isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("「${s.label}」Android 版尚未移植", color = c.secondary, fontSize = 14.sp)
@@ -277,7 +298,7 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
                 val subs: List<String> = when (p) {
                     is HomeSource -> when (p) {
                         HomeSource.huangguo -> listOf("视频站", "App 源")
-                        HomeSource.ai -> p.subs().map { it.subLabel }
+                        HomeSource.ai -> p.subs().map { it.subLabel } + if (IdjApp.instance.cms.adultUnlocked) listOf("黄果 AI 站") else emptyList()
                         HomeSource.channels, HomeSource.manga -> emptyList()
                         else -> p.subs().map { it.subLabel }
                     }
@@ -463,7 +484,10 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
             HorizontalPager(pager, Modifier.fillMaxSize().testTag("home.hero.pager")) { i ->
                 val s = picks[i]
                 Row(Modifier.fillMaxSize().testTag("home.hero.page.$i").graphicsLayer { alpha = 1f - kotlin.math.abs(pager.getOffsetDistanceInPages(i)).coerceIn(0f, 1f) * 1.6f }
-                    .pressClick(0.98f, label = "home.hero.page.$i", ring = RoundedCornerShape(22.dp)) { onOpen(s.seriesId) }.padding(14.dp), verticalAlignment = Alignment.Top) {
+                    .pressClick(0.98f, label = "home.hero.page.$i", ring = RoundedCornerShape(22.dp)) {
+                        app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
+                        onOpen(s.seriesId)
+                    }.padding(14.dp), verticalAlignment = Alignment.Top) {
                     PosterArt(s.cover, Modifier.size(posterWidth, posterWidth * 4 / 3), badge = HomeFmt.progress(s)?.let { DS.spaced(it) })
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f).fillMaxHeight().padding(top = 3.dp, bottom = 1.dp)) {
@@ -604,7 +628,10 @@ private fun homeShelfMeta(s: HGSeries): String {
 @Composable
 fun HomePosterCard(s: HGSeries, onOpen: (String) -> Unit) {
     val c = IdjThemeColors
-    Column(Modifier.pressClick(0.97f, label = s.title, ring = RoundedCornerShape(10.dp)) { onOpen(s.seriesId) }) {
+    Column(Modifier.pressClick(0.97f, label = s.title, ring = RoundedCornerShape(10.dp)) {
+        app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
+        onOpen(s.seriesId)
+    }) {
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(10.dp)).background(c.elevated).border(0.6.dp, c.text.copy(0.12f), RoundedCornerShape(10.dp))) {
             AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             HomeFmt.progress(s)?.let { HomeBadge(it, Modifier.align(Alignment.BottomEnd).padding(5.dp)) }

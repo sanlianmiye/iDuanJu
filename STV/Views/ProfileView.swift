@@ -2,13 +2,16 @@ import SwiftUI
 
 struct ProfileView: View {
     @State private var message: String?
+    @State private var showHongguoLogin = false
     @ObservedObject private var library = LibraryStore.shared
     @ObservedObject private var gate = SourceGate.shared
+    @ObservedObject private var hgAccount = HongguoWebAccount.shared
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 Text("我的").font(.largeTitle.weight(.heavy)).foregroundStyle(STVTheme.text).padding(.horizontal, 16)
+                hongguoAccountCard
                 if !library.continueWatching.isEmpty { ContinueRow(items: library.continueWatching) }
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader(title: "我的收藏", trailing: AnyView(NavigationLink(value: Route.favorites) {
@@ -56,6 +59,75 @@ struct ProfileView: View {
         }
         .background(STVTheme.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showHongguoLogin) {
+            HongguoLoginView()
+        }
+        .task {
+            if hgAccount.isLoggedIn { _ = await hgAccount.refreshProfile() }
+        }
+    }
+
+    @ViewBuilder
+    private var hongguoAccountCard: some View {
+        HStack(spacing: 12) {
+            if let p = hgAccount.profile {
+                if !p.avatarUrl.isEmpty {
+                    CoverView(url: p.avatarUrl, corner: 22)
+                        .frame(width: 44, height: 44)
+                        .clipShape(Circle())
+                } else {
+                    Circle()
+                        .fill(STVTheme.accentSoft)
+                        .frame(width: 44, height: 44)
+                        .overlay(Text(String(p.nickname.prefix(1))).font(.headline).foregroundStyle(STVTheme.accent))
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(p.nickname)
+                        .font(.headline)
+                        .foregroundStyle(STVTheme.text)
+                        .lineLimit(1)
+                    Text(hgAccount.lastSyncNote ?? "已连接红果短剧，观看进度自动同步")
+                        .font(.caption)
+                        .foregroundStyle(STVTheme.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button("退出") {
+                    hgAccount.logout()
+                    message = "已退出红果短剧账号"
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(STVTheme.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(STVTheme.glass, in: Capsule())
+            } else {
+                Circle()
+                    .fill(STVTheme.accentSoft)
+                    .frame(width: 44, height: 44)
+                    .overlay(Image(systemName: "qrcode.viewfinder").font(.title3).foregroundStyle(STVTheme.accent))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("红果短剧扫码登录")
+                        .font(.headline)
+                        .foregroundStyle(STVTheme.text)
+                    Text("扫码连接账号，同步短剧观看进度")
+                        .font(.caption)
+                        .foregroundStyle(STVTheme.secondary)
+                }
+                Spacer()
+                Button("去扫码") {
+                    showHongguoLogin = true
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(STVTheme.accent, in: Capsule())
+            }
+        }
+        .padding(14)
+        .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 16)
     }
 
     private var pluginTrailing: String? {

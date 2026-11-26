@@ -1,17 +1,101 @@
 package app.iduanju.core
 
+import app.iduanju.core.hongguo.HGNet
 import app.iduanju.core.hongguo.HGPlayerDevice
 import app.iduanju.core.hongguo.HGRankGenre
 import app.iduanju.core.hongguo.HGRankSub
 import app.iduanju.core.hongguo.HongguoClient
+import app.iduanju.core.util.J
+import okhttp3.CookieJar
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import javax.net.SocketFactory
+
+object LiveTestNet {
+    private val dnsCache = ConcurrentHashMap<String, List<InetAddress>>()
+
+    fun configureIfRequested(): OkHttpClient? {
+        val bindIp = System.getProperty("idj.bindLocal")?.trim()?.takeIf { it.isNotEmpty() } ?: return HGNet.clientOverride
+        HGNet.clientOverride?.let { return it }
+        val localAddr = InetAddress.getByName(bindIp)
+        val factory = object : SocketFactory() {
+            override fun createSocket(): Socket = Socket().apply { bind(InetSocketAddress(localAddr, 0)) }
+            override fun createSocket(host: String, port: Int): Socket = Socket(host, port, localAddr, 0)
+            override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket = Socket(host, port, localAddr, localPort)
+            override fun createSocket(host: InetAddress, port: Int): Socket = Socket(host, port, localAddr, 0)
+            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket = Socket(address, port, localAddr, localPort)
+        }
+        val dohHttp = OkHttpClient.Builder()
+            .proxy(Proxy.NO_PROXY)
+            .socketFactory(factory)
+            .dns(object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> =
+                    if (hostname == "dns.alidns.com") {
+                        listOf(
+                            InetAddress.getByAddress("dns.alidns.com", byteArrayOf(223.toByte(), 5, 5, 5)),
+                            InetAddress.getByAddress("dns.alidns.com", byteArrayOf(223.toByte(), 6, 6, 6)),
+                        )
+                    } else {
+                        listOf(InetAddress.getByName(hostname))
+                    }
+            })
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .build()
+        val dohDns = object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                if (hostname.matches(Regex("""\d+\.\d+\.\d+\.\d+"""))) return listOf(InetAddress.getByName(hostname))
+                dnsCache[hostname]?.let { return it }
+                val req = Request.Builder()
+                    .url("https://dns.alidns.com/resolve?name=$hostname&type=1")
+                    .header("Accept", "application/json")
+                    .build()
+                dohHttp.newCall(req).execute().use { resp ->
+                    val j = J.parse(resp.body?.string() ?: "{}")
+                    val ips = J.arr(j.opt("Answer")).mapNotNull { a ->
+                        val d = J.dict(a)
+                        if (J.int(d.opt("type")) == 1) InetAddress.getByAddress(hostname, InetAddress.getByName(J.str(d.opt("data"))).address) else null
+                    }
+                    if (ips.isNotEmpty()) {
+                        dnsCache[hostname] = ips
+                        return ips
+                    }
+                }
+                return Dns.SYSTEM.lookup(hostname)
+            }
+        }
+        val client = OkHttpClient.Builder()
+            .proxy(Proxy.NO_PROXY)
+            .cookieJar(CookieJar.NO_COOKIES)
+            .socketFactory(factory)
+            .dns(dohDns)
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+        runCatching {
+            val ipInfo = client.newCall(Request.Builder().url("https://myip.ipip.net/").build()).execute().use { it.body?.string()?.trim() }
+            println("[LiveTestNet] egress=$ipInfo reading.snssdk.com=${dohDns.lookup("reading.snssdk.com")}")
+        }.onFailure { println("[LiveTestNet] egress check failed: $it") }
+        HGNet.clientOverride = client
+        return client
+    }
+}
 
 /**
- * Live network tests against 红果. Run with: ./gradlew :core:test -Plive=1 [-PhgDevice=did,iid]
+ * Live network tests against 红果. Run with: ./gradlew :core:test -Plive=1 [-PhgDevice=did,iid] [-PbindLocal=192.168.x.x]
  * Soft-reject evidence is printed to stderr (HTTP code + empty body).
  */
 class HongguoLiveTest {
@@ -20,6 +104,7 @@ class HongguoLiveTest {
     @Before
     fun setUp() {
         assumeTrue("set -Plive=1 to run", System.getProperty("idj.live") == "1")
+        LiveTestNet.configureIfRequested()
         val dir = File("build/hg-live-data").also { it.mkdirs() }
         System.getProperty("idj.hgDevice")?.takeIf { it.contains(",") }?.let { s ->
             val p = s.split(",", limit = 2)
@@ -65,15 +150,18 @@ class HongguoLiveTest {
             r.url?.let { u ->
             }
             r.streams.firstOrNull()?.let { s ->
-                val conn = java.net.URI(s.url).toURL().openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 15000; conn.readTimeout = 15000
-                conn.setRequestProperty("User-Agent", "com.phoenix.read/73932")
-                conn.connect()
-                val code = conn.responseCode
-                val n = conn.inputStream.use { it.read(ByteArray(64 * 1024)) }
-                println("[live] media probe HTTP $code bytes=$n encrypted=${s.key.isNotEmpty()}")
-                assertTrue("media HTTP $code", code in 200..299)
-                assertTrue("media empty", n > 0)
+                val http = LiveTestNet.configureIfRequested() ?: OkHttpClient()
+                val req = Request.Builder().url(s.url)
+                    .header("User-Agent", "com.phoenix.read/73932")
+                    .header("Range", "bytes=0-65535")
+                    .build()
+                http.newCall(req).execute().use { resp ->
+                    val code = resp.code
+                    val n = resp.body?.bytes()?.size ?: 0
+                    println("[live] media probe HTTP $code bytes=$n encrypted=${s.key.isNotEmpty()}")
+                    assertTrue("media HTTP $code", code in 200..299)
+                    assertTrue("media empty", n > 0)
+                }
             }
         } catch (e: Exception) {
             System.err.println("[live] RESOLVE FAILED: ${e.message}")

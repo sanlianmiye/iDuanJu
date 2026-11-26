@@ -111,8 +111,9 @@ data class HGFilterOption(val id: String, val name: String)
 data class HGFilterRow(val type: String, val name: String, val selectType: Int, val items: List<HGFilterOption>)
 data class HGPanel(val rows: List<HGFilterRow>)
 data class HGWebDetail(
-    var title: String = "", var intro: String = "", var tags: List<String> = emptyList(),
+    var title: String = "", var cover: String = "", var intro: String = "", var tags: List<String> = emptyList(),
     var cast: List<HGCelebrity> = emptyList(), var favoriteCount: Long = 0,
     var episodeLabel: String = "", var seriesGroupId: String = "",
     var rating: Double = 0.0, var ratingCount: String = "", var hotText: String = "",
+    var totalEps: Int = 0, var onlineTime: Long = 0, var episodes: List<HGEpisode> = emptyList(),
 )

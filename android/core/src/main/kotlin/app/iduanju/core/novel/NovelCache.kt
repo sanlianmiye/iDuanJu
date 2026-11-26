@@ -77,4 +77,7 @@ class NovelCache(private val root: File) {
             Saved(j.getString("source"),NovelHit(j.getString("name"),j.optString("author"),j.getString("url"),j.optString("cover")),toc,info,j.optLong("addedAt",0))
         }.getOrNull()
     }
+    @Synchronized fun removeBook(source: String, book: String) {
+        dir(source, book).deleteRecursively()
+    }
 }

@@ -61,8 +61,32 @@ class PluginHost(
     private var nextNode = 1
     private val kv: JSONObject = try { JSONObject(File(dir, "storage.json").readText()) } catch (_: Exception) { JSONObject() }
     @Volatile var learnedUA: String? = null
+    /** Optional interactive user-verification hook (opens visible WebView so the user can complete verification). */
+    @Volatile var onVerifyRequired: ((String) -> Boolean)? = null
     /** Test hook: request → (status, headers, body). */
     @Volatile var fixture: ((String, String) -> Triple<Int, Map<String, String>, ByteArray>?)? = null
+
+    /** Import cookies (e.g. from Android WebView CookieManager) into this plugin's jar after user verification. */
+    fun importCookies(urlStr: String, rawCookieHeader: String) {
+        val url = urlStr.toHttpUrlOrNull() ?: return
+        if (rawCookieHeader.isBlank()) return
+        val parsed = rawCookieHeader.split(';').mapNotNull { part ->
+            val trimmed = part.trim()
+            val eq = trimmed.indexOf('=')
+            if (eq <= 0) return@mapNotNull null
+            val name = trimmed.substring(0, eq).trim()
+            val value = trimmed.substring(eq + 1).trim()
+            if (name.isEmpty()) return@mapNotNull null
+            Cookie.Builder()
+                .name(name)
+                .value(value)
+                .domain(url.host)
+                .path("/")
+                .expiresAt(System.currentTimeMillis() + 24 * 60 * 60_000L)
+                .build()
+        }
+        if (parsed.isNotEmpty()) jar.saveFromResponse(url, parsed)
+    }
 
     fun beginCall() { requestsThisCall = 0 }
     fun endCall() { synchronized(html) { html.clear(); nextNode = 1 } }
@@ -196,7 +220,7 @@ class PluginHost(
         val follow = a.optString("redirect", "follow") != "manual"
         val respType = a.optString("responseType", "text")
         val client = baseHttp.newBuilder().callTimeout(timeout, TimeUnit.SECONDS).build()
-        var hops = 0; var m = method; var bd = body
+        var hops = 0; var m = method; var bd = body; var retriedCf = false
         while (true) {
             rateLimit()
             val start = System.currentTimeMillis()
@@ -224,6 +248,18 @@ class PluginHost(
                 continue
             }
             val text = if (respType != "base64") decodeText(data, hdrs["content-type"]) else null
+            if (!retriedCf && isCloudflareChallenge(status, hdrs, text)) {
+                val handler = onVerifyRequired
+                if (manifest.cloudflare && handler != null) {
+                    log("⚠ ${url.host} 触发站点验证，等待用户完成验证")
+                    if (handler(url.toString())) {
+                        retriedCf = true
+                        headers["User-Agent"] = learnedUA ?: DEFAULT_UA
+                        continue
+                    }
+                    throw PluginException("E_CF_REQUIRED", "已取消站点验证")
+                }
+            }
             val o = JSONObject().put("status", status).put("url", url.toString()).put("headers", JSONObject(hdrs))
             o.put("body", when {
                 text == null -> Base64.getEncoder().encodeToString(data)
@@ -232,6 +268,16 @@ class PluginHost(
             })
             return o
         }
+    }
+
+    private fun isCloudflareChallenge(status: Int, hdrs: Map<String, String>, text: String?): Boolean {
+        if (hdrs["cf-mitigated"]?.contains("challenge", ignoreCase = true) == true) return true
+        if (status != 403 && status != 503) return false
+        val body = text ?: return false
+        return body.contains("Just a moment", ignoreCase = true) ||
+            body.contains("cf-browser-verification", ignoreCase = true) ||
+            body.contains("cdn-cgi/challenge-platform", ignoreCase = true) ||
+            body.contains("Enable JavaScript and cookies to continue", ignoreCase = true)
     }
 
     private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20").replace("%7E", "~")

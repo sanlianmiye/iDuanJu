@@ -506,6 +506,24 @@ fun NovelScreen(onBack: () -> Unit, embedded: Boolean = false, onFullScreenChang
                     }
                 },
                 onBook = { entry -> if (entry.isLocal) openLocalFile() else openResult(entry.sourceId, entry.book) },
+                onDelete = { targets ->
+                    val last = runCatching { JSONObject(prefs.getString("last", "{}")!!) }.getOrDefault(JSONObject())
+                    val lastSrc = last.optString("source")
+                    val lastUrl = last.optString("url")
+                    var clearLast = false
+                    for (entry in targets) {
+                        if (entry.isLocal) {
+                            File(context.filesDir, "novel-local.txt").delete()
+                            prefs.edit().remove("localName").remove("localAuthor").apply()
+                            if (lastSrc == "local") clearLast = true
+                        } else {
+                            cache.removeBook(entry.sourceId, entry.book.url)
+                            if (lastSrc == entry.sourceId && lastUrl == entry.book.url) clearLast = true
+                        }
+                    }
+                    if (clearLast) prefs.edit().remove("last").apply()
+                    shelfRevision++
+                },
                 onImport = { importResult = null; importing = true },
                 onSearch = { searching = true },
                 onRank = { shelf = false; searching = false; hits = emptyList() },

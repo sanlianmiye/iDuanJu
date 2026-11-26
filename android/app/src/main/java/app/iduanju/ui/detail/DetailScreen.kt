@@ -95,16 +95,29 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
     var reload by remember { mutableIntStateOf(0) }
     LaunchedEffect(seriesId, reload) {
         err = null
-        try { d = if(app.iduanju.BuildConfig.DEBUG && seriesId in listOf("ui-color-bars", "ui-detail-sparse", "ui-detail-full")) HGSeriesDetail(
-            seriesId=seriesId,title="本地界面测试 · 非真实片源",desc="此页面使用明确标注的本地样例数据，用于检查详情页的排版、折叠、选集和滚动吸顶，不代表真实片源服务。".repeat(4),
-            author="界面验证",totalEps=48,episodes=(1..48).map{app.iduanju.core.hongguo.HGEpisode(it,"fixture-$it",60,"测试第 $it 集")},
-            tags=listOf("本地样例","排版验证"),favoriteCount=403000,
-            rating=if(seriesId=="ui-detail-sparse")0.0 else 8.6,ratingCount=if(seriesId=="ui-detail-sparse")"" else "1.2万",
-            hotText=if(seriesId=="ui-detail-sparse")"" else "512万",source="本地样例",
-            relatedSeries=(1..3).map { HGSeries(seriesId=if(it==1)seriesId else "sample-$it",title="本地系列样例 $it",episodeCount=48) },
-            cast=(1..5).map { app.iduanju.core.hongguo.HGCelebrity(id="sample-$it",name="样例演员 $it",role="饰 样例") })
-            else withContext(Dispatchers.IO) { app.iduanju.data.Catalog.detail(seriesId) } }
-        catch (e: Exception) { err = e.message ?: "加载失败" }
+        try {
+            if (app.iduanju.BuildConfig.DEBUG && seriesId in listOf("ui-color-bars", "ui-detail-sparse", "ui-detail-full")) {
+                d = HGSeriesDetail(
+                    seriesId=seriesId,title="本地界面测试 · 非真实片源",desc="此页面使用明确标注的本地样例数据，用于检查详情页的排版、折叠、选集和滚动吸顶，不代表真实片源服务。".repeat(4),
+                    author="界面验证",totalEps=48,episodes=(1..48).map{app.iduanju.core.hongguo.HGEpisode(it,"fixture-$it",60,"测试第 $it 集")},
+                    tags=listOf("本地样例","排版验证"),favoriteCount=403000,
+                    rating=if(seriesId=="ui-detail-sparse")0.0 else 8.6,ratingCount=if(seriesId=="ui-detail-sparse")"" else "1.2万",
+                    hotText=if(seriesId=="ui-detail-sparse")"" else "512万",source="本地样例",
+                    relatedSeries=(1..3).map { HGSeries(seriesId=if(it==1)seriesId else "sample-$it",title="本地系列样例 $it",episodeCount=48) },
+                    cast=(1..5).map { app.iduanju.core.hongguo.HGCelebrity(id="sample-$it",name="样例演员 $it",role="饰 样例") })
+            } else {
+                val base = withContext(Dispatchers.IO) { app.iduanju.data.Catalog.detail(seriesId, web = false) }
+                d = base
+                if (app.iduanju.data.Catalog.isHongguo(seriesId) && base.cast.isEmpty() && base.tags.isEmpty()) {
+                    val enriched = withContext(Dispatchers.IO) { app.iduanju.data.Catalog.enrich(seriesId, base) }
+                    if (enriched != null && d?.seriesId == enriched.seriesId) d = enriched
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            err = e.message ?: "加载失败"
+        }
     }
     val metrics = LocalLayoutMetrics.current
     val isExpanded = metrics.tier == SizeTier.Expanded
@@ -252,7 +265,12 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                         .navigationBarsPadding()
                         .padding(bottom = 110.dp),
                 ) {
-                    DetailHero(d, seriesId)
+                    DetailHero(
+                        d = d,
+                        sid = seriesId,
+                        coverHint = remember(seriesId) { app.iduanju.data.Catalog.peekCover(seriesId) },
+                        titleHint = remember(seriesId) { app.iduanju.data.Catalog.peekTitle(seriesId) },
+                    )
                     val dd = d
                     when {
                         dd != null -> DetailBody(dd, seriesId, resume, group, { group = it }, onPlay, onOpenSeries, playTitle, startEp) { actionsBottom = it }
@@ -296,35 +314,45 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
 }
 
 @Composable
-private fun DetailHero(d: HGSeriesDetail?, sid: String) {
+private fun DetailHero(d: HGSeriesDetail?, sid: String, coverHint: String = "", titleHint: String = "") {
     val c = IdjThemeColors
+    val coverUrl = d?.cover?.takeIf { it.isNotEmpty() } ?: coverHint
+    val displayTitle = d?.title?.takeIf { it.isNotEmpty() } ?: titleHint
     Box(Modifier.fillMaxWidth().height(300.dp)) {
-        // `.bd`: the poster blurred 30 dp past the edges; API < 31 falls back to a tiny upscaled thumbnail.
-        Box(Modifier.fillMaxSize().clipToBounds()) {
-            val ctx = androidx.compose.ui.platform.LocalContext.current
-            val req = remember(d?.cover) {
-                coil.request.ImageRequest.Builder(ctx)
-                    .data(d?.cover)
-                    .size(48, 64)
-                    .memoryCacheKey("detail-blur:${d?.cover}")
-                    .build()
+        // `.bd`: the poster itself blurred past the edges. Use the raw cover URL on API 31+ so it hits
+        // Coil's exact memory-cache entry from the card the user just tapped on frame 0 (no blank/white flash).
+        if (coverUrl.isNotEmpty()) {
+            Box(Modifier.fillMaxSize().clipToBounds()) {
+                if (android.os.Build.VERSION.SDK_INT >= 31) {
+                    AsyncImage(
+                        coverUrl,
+                        null,
+                        Modifier.fillMaxSize().scale(1.30f).blur(24.dp),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    val ctx = androidx.compose.ui.platform.LocalContext.current
+                    val req = remember(coverUrl) {
+                        coil.request.ImageRequest.Builder(ctx)
+                            .data(coverUrl)
+                            .size(48, 64)
+                            .memoryCacheKey("detail-blur:$coverUrl")
+                            .build()
+                    }
+                    AsyncImage(req, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
             }
-            if (android.os.Build.VERSION.SDK_INT >= 31) {
-                AsyncImage(req, null, Modifier.fillMaxSize().scale(1.25f).blur(12.dp), contentScale = ContentScale.Crop)
-            } else {
-                AsyncImage(req, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            }
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(0.30f), 0.34f to Color.Black.copy(0.08f), 0.76f to c.bg.copy(0.74f), 1f to c.bg)))
         }
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(0.30f), 0.34f to Color.Black.copy(0.08f), 0.76f to c.bg.copy(0.74f), 1f to c.bg)))
         Row(Modifier.align(Alignment.BottomStart).padding(horizontal = 20.dp).padding(bottom = 2.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             val eps = d?.let { "全 ${maxOf(it.totalEps, it.episodes.size)} 集" }
             Box(Modifier.size(116.dp, 155.dp).shadow(15.dp, RoundedCornerShape(12.dp), ambientColor = Color.Black.copy(0.4f), spotColor = Color.Black.copy(0.4f))) {
-                PosterArt(d?.cover ?: "", Modifier.fillMaxSize(), corner = 12.dp)
+                PosterArt(coverUrl, Modifier.fillMaxSize(), corner = 12.dp)
                 if (eps != null) Text(eps, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp), color = Color.White.copy(0.8f), fontSize = 10.sp)
             }
             Column(Modifier.weight(1f).padding(bottom = 2.dp)) {
                 DSStatus(d?.source ?: "红果短剧", StatusTone.Accent)
-                Text(d?.title ?: "", color = c.text, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                Text(displayTitle, color = c.text, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     lineHeight = 29.sp, modifier = Modifier.padding(top = 8.dp))
                 val meta = listOfNotNull(d?.let { if (it.episodeLabel.isEmpty()) eps else DS.spaced(it.episodeLabel) }, d?.author?.ifEmpty { null }).joinToString(" · ")
                 Text(meta, color = c.secondary, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 6.dp))
@@ -357,13 +385,6 @@ private fun TabletPortraitHero(
     val c = IdjThemeColors
     val go = app.iduanju.ui.LocalNavigate.current
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val blurReq = remember(d.cover) {
-        coil.request.ImageRequest.Builder(ctx)
-            .data(d.cover)
-            .size(48, 64)
-            .memoryCacheKey("detail-blur:${d.cover}")
-            .build()
-    }
     val epsLabel = "全 ${maxOf(d.totalEps, d.episodes.size)} 集"
     val cardShape = RoundedCornerShape(24.dp)
 
@@ -377,16 +398,35 @@ private fun TabletPortraitHero(
     ) {
         // Subtle blurred poster backdrop with directional scrim so text & CTA remain crisp.
         Box(Modifier.matchParentSize().clipToBounds()) {
-            AsyncImage(
-                blurReq,
-                null,
-                Modifier
-                    .fillMaxSize()
-                    .scale(1.25f)
-                    .then(if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(22.dp) else Modifier)
-                    .alpha(if (c.dark) 0.36f else 0.16f),
-                contentScale = ContentScale.Crop,
-            )
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                AsyncImage(
+                    d.cover,
+                    null,
+                    Modifier
+                        .fillMaxSize()
+                        .scale(1.25f)
+                        .blur(22.dp)
+                        .alpha(if (c.dark) 0.36f else 0.16f),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                val blurReq = remember(d.cover) {
+                    coil.request.ImageRequest.Builder(ctx)
+                        .data(d.cover)
+                        .size(48, 64)
+                        .memoryCacheKey("detail-blur:${d.cover}")
+                        .build()
+                }
+                AsyncImage(
+                    blurReq,
+                    null,
+                    Modifier
+                        .fillMaxSize()
+                        .scale(1.25f)
+                        .alpha(if (c.dark) 0.36f else 0.16f),
+                    contentScale = ContentScale.Crop,
+                )
+            }
             Box(
                 Modifier
                     .fillMaxSize()

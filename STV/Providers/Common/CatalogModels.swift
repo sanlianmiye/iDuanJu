@@ -21,9 +21,12 @@ struct DramaSource: RawRepresentable, Hashable, Codable, Identifiable, Sendable 
     static let xvideos = DramaSource("xvideos")
     static let xnxx = DramaSource("xnxx")
     static let pornhub = DramaSource("pornhub")
+    static let youporn = DramaSource("youporn")
+    static let redtube = DramaSource("redtube")
+    static let hqporner = DramaSource("hqporner")
     static let legado = DramaSource("legado")
     static let telegram = DramaSource("telegram")
-    static let builtins: [DramaSource] = [.hongguo, .huangguo, .jable, .missav, .hanime1, .supjav, .eporner, .xvideos, .xnxx, .pornhub, .telegram]
+    static let builtins: [DramaSource] = [.hongguo, .huangguo, .jable, .missav, .hanime1, .supjav, .eporner, .xvideos, .xnxx, .pornhub, .youporn, .redtube, .hqporner, .telegram]
 
     static func plugin(_ id: String) -> DramaSource { DramaSource("p." + id) }
     static func cms(_ key: String) -> DramaSource { DramaSource("cms." + key) }
@@ -46,6 +49,9 @@ struct DramaSource: RawRepresentable, Hashable, Codable, Identifiable, Sendable 
         case .xvideos: "XVideos"
         case .xnxx: "XNXX"
         case .pornhub: "Pornhub"
+        case .youporn: "YouPorn"
+        case .redtube: "RedTube"
+        case .hqporner: "HQPorner"
         case .legado: "视频书"
         case .telegram: "Telegram"
         default:

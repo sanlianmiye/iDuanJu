@@ -181,7 +181,7 @@ struct PlayerTimelineV3: View {
 // MARK: Icon row
 
 enum PlayerPanel: String, Identifiable {
-    case episodes, quality, rates, audio, subtitles, danmaku
+    case episodes, quality, rates, audio, subtitles, danmaku, more
     var id: Self { self }
 }
 
@@ -528,5 +528,214 @@ struct EpisodesPopover: View {
             }
             .onAppear { if let selected { proxy.scrollTo(selected, anchor: .leading) } }
         }
+    }
+}
+
+/// Custom Liquid Glass `更多设置` panel (replaces `SwiftUI.Menu` so 0.25 s playback ticks never trigger
+/// `UIContextMenuInteraction.updateVisibleMenu` backdrop-recalculation flicker on iOS 26/27; synced 1:1 with Android `MoreSettingsPanel`).
+struct MoreSettingsPopover: View {
+    let fillScreen: Bool
+    let enhanceLevel: Int
+    let sdrToHdr: Bool
+    let isNativeHdr: Bool
+    let sleepMode: Int
+    let autoNext: Bool
+    let autoNextDrama: Bool
+    let showAutoNextDrama: Bool
+    let showTech: Bool
+    let muted: Bool
+    let showDanmaku: Bool
+    let danmakuSummary: String
+    let prebufferInfo: String?
+    let onClose: () -> Void
+    let onOpenDanmaku: () -> Void
+    let onFillScreen: (Bool) -> Void
+    let onEnhance: (Int) -> Void
+    let onSdrToHdr: (Bool) -> Void
+    let onSleep: (Int) -> Void
+    let onAutoNext: (Bool) -> Void
+    let onAutoNextDrama: (Bool) -> Void
+    let onToggleTech: () -> Void
+    let onToggleMute: () -> Void
+    let onCopyTitle: () -> Void
+
+    private var sleepSubtitle: String? {
+        switch sleepMode {
+        case -1: return "定时：播完本集"
+        case let m where m > 0: return "定时：\(m) 分钟"
+        default: return prebufferInfo
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("更多设置")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                    if let sub = sleepSubtitle, !sub.isEmpty {
+                        Text(sub)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.78))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.10), in: Circle())
+                }
+                .buttonStyle(PressScale())
+                .accessibilityLabel("关闭")
+            }
+
+            if showDanmaku {
+                Button(action: onOpenDanmaku) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.86))
+                        Text("弹幕设置")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text(danmakuSummary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.55))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.50))
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 44)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScale())
+            }
+
+            optionSection("画面比例", items: [("适应", false), ("铺满", true)], selected: fillScreen, onSelect: onFillScreen)
+
+            optionSection("画质增强", items: [("关闭", 0), ("标准", 1), ("强效", 2)], selected: enhanceLevel, onSelect: onEnhance)
+
+            if isNativeHdr {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("SDR 转 HDR · 当前片源已是原生 HDR")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.42))
+                    HStack(spacing: 8) {
+                        Text("原生 HDR")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(STVTheme.accent)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 7)
+                            .background(STVTheme.accent.opacity(0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(STVTheme.accent.opacity(0.45), lineWidth: 0.8))
+                        Spacer()
+                    }
+                    .opacity(0.55)
+                }
+            } else {
+                optionSection("SDR 转 HDR (逆色调映射)", items: [("关闭", false), ("开启", true)], selected: sdrToHdr, onSelect: onSdrToHdr)
+            }
+
+            optionSection(
+                "定时关闭",
+                items: [("关", 0), ("本集完", -1), ("15分", 15), ("30分", 30), ("60分", 60)],
+                selected: sleepMode,
+                onSelect: onSleep
+            )
+
+            optionSection("自动连播", items: [("开启", true), ("关闭", false)], selected: autoNext, onSelect: onAutoNext)
+
+            if showAutoNextDrama {
+                optionSection("播完连刷推荐", items: [("开启", true), ("关闭", false)], selected: autoNextDrama, onSelect: onAutoNextDrama)
+            }
+
+            // Quick utility pills (技术信息 / 静音 / 复制剧名)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("快捷操作")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.60))
+                HStack(spacing: 8) {
+                    quickPill(title: "技术信息", symbol: "info.circle", active: showTech, action: onToggleTech)
+                    quickPill(title: muted ? "已静音" : "静音", symbol: muted ? "speaker.slash.fill" : "speaker.wave.2", active: muted, action: onToggleMute)
+                    quickPill(title: "复制剧名", symbol: "doc.on.doc", active: false, action: onCopyTitle)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .environment(\.colorScheme, .dark)
+    }
+
+    private func optionSection<T: Equatable>(
+        _ label: String,
+        items: [(String, T)],
+        selected: T,
+        onSelect: @escaping (T) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.60))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(items.indices, id: \.self) { idx in
+                        let pair = items[idx]
+                        let on = pair.1 == selected
+                        Button {
+                            if !on {
+                                UISelectionFeedbackGenerator().selectionChanged()
+                                onSelect(pair.1)
+                            }
+                        } label: {
+                            Text(pair.0)
+                                .font(.system(size: 12, weight: on ? .semibold : .regular))
+                                .foregroundStyle(on ? STVTheme.accent : .white.opacity(0.86))
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 7)
+                                .background(
+                                    on ? STVTheme.accent.opacity(0.18) : Color.white.opacity(0.08),
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .strokeBorder(on ? STVTheme.accent.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 0.8)
+                                )
+                        }
+                        .buttonStyle(PressScale())
+                    }
+                }
+            }
+        }
+    }
+
+    private func quickPill(title: String, symbol: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 12, weight: active ? .semibold : .regular))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(active ? STVTheme.accent : .white.opacity(0.86))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(
+                active ? STVTheme.accent.opacity(0.18) : Color.white.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(active ? STVTheme.accent.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 0.8)
+            )
+        }
+        .buttonStyle(PressScale())
     }
 }

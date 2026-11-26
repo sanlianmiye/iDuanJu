@@ -19,11 +19,144 @@ object HGCurrentPlayer {
     private val factorIV = UIntArray(8) { le(profile, 3136 + it * 4) }
     private val factorTable = UIntArray(64) { le(profile, 3168 + it * 4) }
     private val padding = profile.copyOfRange(3424, 3428)
+    private val defaultProcessNonce: String = Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(ByteArray(18).also { SecureRandom().nextBytes(it) })
+    private val defaultProcessStarted: Long = System.currentTimeMillis()
     private fun u(b: ByteArray, i: Int) = b[i].toInt() and 255
     private fun le(b: ByteArray, i: Int) = (0..3).fold(0u) { v, j -> v or (u(b, i+j).toUInt() shl (j*8)) }
     private fun be(b: ByteArray, i: Int) = (0..3).fold(0u) { v, j -> (v shl 8) or u(b,i+j).toUInt() }
     private fun rr(v: UInt, n: Int): UInt = v.rotateRight(n)
     private fun b64(b: ByteArray) = Base64.getEncoder().encodeToString(b)
+
+    fun encodeV5Query(pairs: List<Pair<String, String>>): String =
+        pairs.joinToString("&") { encV5(it.first) + "=" + encV5(it.second) }
+
+    private fun encV5(str: String): String = buildString(str.length + 8) {
+        for (byte in str.toByteArray(Charsets.UTF_8)) {
+            val c = byte.toInt() and 0xff
+            val keep = (c in 65..90) || (c in 97..122) || (c in 48..57) ||
+                c == '-'.code || c == '_'.code || c == '.'.code || c == '~'.code || c == '*'.code
+            if (keep) append(c.toChar()) else append(String.format("%%%02X", c))
+        }
+    }
+
+    /**
+     * Medusa v5 mobile playback signer (7.4.5.32 preload/v1 & video_tab/v1, field 21 = 312).
+     * Selects the `_rticket` branch where `ivOf(sm3(query), md5(body), ts) & 15 == 12` and emits
+     * only the 3 v5 headers (`x-khronos`, `x-helios`, `x-medusa`) plus body stub headers when `includeBodyHeaders` is true.
+     */
+    fun signPlaybackV5(
+        pairs: List<Pair<String, String>>,
+        nowMillis: Long,
+        body: ByteArray,
+        includeBodyHeaders: Boolean = body.isNotEmpty(),
+        entropy: ByteArray = ByteArray(16).also { SecureRandom().nextBytes(it) },
+        processNonce: String = defaultProcessNonce,
+        processStarted: Long = defaultProcessStarted,
+        field21: Int? = HGProtocol.current.field21,
+    ): Pair<String, Map<String, String>> {
+        require(nowMillis > 1000L && entropy.size >= 16)
+        val base = pairs.filter { it.first != "_rticket" }
+        val ts = (nowMillis / 1000L).toUInt()
+        val digest = s.md5(body)
+        val tsBytes = s.le32(ts)
+        for (offset in 0 until 1024) {
+            val ticket = nowMillis + offset
+            val next = base + ("_rticket" to ticket.toString())
+            val query = encodeV5Query(next)
+            val qhash = s.sm3(query.toByteArray(Charsets.UTF_8))
+            val low = (s.getIV(s.getIV(s.getIV(0x20230928u, qhash), digest), tsBytes) and 15u).toInt()
+            if (low != 12) continue
+            val values = LinkedHashMap<String, String>(next.size).apply { for ((k, v) in next) put(k, v) }
+            val headers = linkedMapOf(
+                "x-khronos" to ts.toString(),
+                "x-helios" to helios(ts.toULong(), "646637794", "8662", le(entropy, 4)),
+                "x-medusa" to medusaV5(qhash, digest, ts, values, le(entropy, 0), le(entropy, 8), le(entropy, 12), processNonce, processStarted, field21),
+            )
+            if (includeBodyHeaders) {
+                headers["Content-Type"] = "application/json; charset=utf-8"
+                headers["x-ss-stub"] = s.hexStr(digest).uppercase()
+            }
+            return query to headers
+        }
+        error("v5 playback branch search exhausted")
+    }
+
+    internal fun hashF13V5(qhash: ByteArray, digest: ByteArray, ts: UInt): ByteArray {
+        val tsBytes = s.le32(ts)
+        val low = (s.getIV(s.getIV(s.getIV(0x20230928u, qhash), digest), tsBytes) and 15u).toInt()
+        require(low == 12) { "v5 hash branch unsupported: $low" }
+        val ivV1 = 0x9d4a97c2u
+        val count = ivV1 + ts
+        val tt = UIntArray(64) { rr(factorTable[it], ((count + 1u) and 31u).toInt()) }
+        val shift = ((count + 2u) and 7u).toInt()
+        val pad = ByteArray(4) { i ->
+            val v = u(padding, i)
+            (((v or (v shl 8)) ushr shift) and 255).toByte()
+        }
+        val data = qhash + digest + tsBytes + pad + byteArrayOf(0, 0, 0, 0, 0, 0, 1, 0xa0.toByte())
+        val di = s.expandWords(data)
+        val ini = UIntArray(8) { rr(factorIV[it], (count and 31u).toInt()) }
+        val chosen = uintArrayOf(96u, 1u, 3u, 4u, 0u, 6u, 5u, 2u, 0u, 7u, 7u)
+        val d = s.mixRounds(ini, chosen, di, tt, ivV1)
+        val ret = ByteArray(32)
+        for (i in 0..7) s.be32(d[i] + ini[i]).copyInto(ret, i * 4)
+        val folded = ByteArray(16) { (u(ret, it) xor u(ret, it + 16)).toByte() }
+        val check = s.sumMD5(folded) or 0x20u
+        return folded + s.le32(check)
+    }
+
+    private fun medusaV5(
+        qhash: ByteArray,
+        digest: ByteArray,
+        ts: UInt,
+        values: Map<String, String>,
+        msgRand: UInt,
+        nonce: UInt,
+        packedRand: UInt,
+        pNonce: String,
+        pStarted: Long,
+        field21: Int?,
+    ): String {
+        val f13 = hashF13V5(qhash, digest, ts)
+        val flags = ByteArray(8)
+        val version = values["version_name"].orEmpty()
+        val did = values["device_id"].orEmpty()
+        val osVer = values["os_version"].orEmpty()
+        val devType = values["device_type"].orEmpty()
+        val channel = values["channel"].orEmpty()
+        val deviceInfo = s.pSInt(1u, 1) + s.pSInt(2u, 2) + s.pStr(3u, "8662") + s.pStr(4u, did) +
+            s.pStr(5u, pNonce) + s.pStr(6u, "!noperm!") + s.pStr(12u, "Asia/Shanghai,8") +
+            s.pStr(13u, "zh_CN") + s.pStr(22u, osVer) + s.pSInt(25u, pStarted) +
+            s.pStr(30u, devType) + s.pStr(31u, "HONOR") + s.pStr(32u, devType) + s.pStr(34u, "HONOR")
+        val env = s.pStr(6u, "v04.10.03.04-bugfix") + s.pStr(8u, channel) + s.pBytes(12u, deviceInfo) + s.pStr(14u, version)
+        val msg = s.pBytes(1u, header) + s.pSInt(2u, 5) + s.pSInt(3u, msgRand.toLong()) + s.pStr(4u, "8662") +
+            s.pStr(5u, did) + s.pStr(6u, "646637794") + s.pStr(7u, version) + s.pStr(8u, "v04.10.03-ml-android") +
+            s.pSInt(9u, 0x040a0300L) + s.pBytes(10u, flags) + s.pSInt(12u, ts.toLong()) + s.pBytes(13u, f13) +
+            s.pBytes(14u, qhash.copyOf(6)) + s.pBytes(15u, s.pSInt(1u, 1) + s.pSInt(2u, 1) + s.pSInt(3u, 1) + s.pSInt(5u, 1)) +
+            s.pSInt(17u, ts.toLong()) + s.pStr(20u, "none") + (if (field21 != null) s.pSInt(21u, field21.toLong()) else ByteArray(0)) + s.pBytes(23u, env) +
+            s.pStr(24u, """{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}""")
+        val (hash, seed) = s.keyHash(material, nonce)
+        val tr = (flags + s.xmxor(msg, hash)).reversedArray()
+        for (i in tr.indices) tr[i] = (u(tr, i) xor u(seed, i.inv() and 3)).toByte()
+        val check = 0x18000001u or ((u(qhash, 0).toUInt() and 63u) shl 14) or ((u(f13, 0).toUInt() and 63u) shl 8)
+        val packed = byteArrayOf(0xca.toByte()) + s.le32(packedRand) + s.le32(check) + tr +
+            byteArrayOf(((nonce shr 16) and 255u).toByte(), ((nonce shr 24) and 255u).toByte())
+        require(packed.size >= 248)
+        val lane = intArrayOf(6, 5, 3, 4, 2, 7, 1, 0)
+        val bits = intArrayOf(1, 7, 3, 6, 2, 0, 4, 5)
+        val plain = ByteArray(31)
+        for (i in 0..247) plain[i / 8] = (u(plain, i / 8) or (((u(packed, i) ushr lane[i % 8]) and 1) shl bits[i % 8])).toByte()
+        val channelBytes = transform(plain, s.md5(material.copyOfRange(0, 16)), s.md5(material.copyOfRange(16, 32)), (ts and 3u).toInt())
+        val bodyOut = packed.copyOf()
+        for (i in 0..247) {
+            bodyOut[i] = ((u(bodyOut, i) and (1 shl lane[i % 8]).inv()) or (((u(channelBytes, i / 8) ushr bits[i % 8]) and 1) shl lane[i % 8])).toByte()
+        }
+        val hdr = s.le32(5u) + header
+        val mask = s.le32(ts)
+        for (i in hdr.indices) hdr[i] = (u(hdr, i) xor u(mask, i and 3)).toByte()
+        return b64(hdr + byteArrayOf((nonce and 255u).toByte(), ((nonce shr 8) and 255u).toByte(), 0, 1, channelBytes[31]) + bodyOut)
+    }
 
     fun sign(pairs: List<Pair<String,String>>, nowMillis: Long, deviceID: String, versionName: String, body: ByteArray,
              entropy: ByteArray = ByteArray(24).also { SecureRandom().nextBytes(it) }): Pair<String, Map<String,String>> {

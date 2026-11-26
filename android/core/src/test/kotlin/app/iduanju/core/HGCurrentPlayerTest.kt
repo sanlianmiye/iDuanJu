@@ -46,4 +46,36 @@ class HGCurrentPlayerTest {
         val baseline=HGCurrentPlayer.sign(pairs,1794827000123,pairs[1].second,pairs[2].second,body,entropy).second
         assertNotEquals(baseline["x-medusa"],HGCurrentPlayer.sign(pairs,1794827000123,pairs[1].second,pairs[2].second,"changed".toByteArray(),entropy).second["x-medusa"])
     }
+    @Test fun playbackV5GoldenVector() {
+        val pairs = listOf(
+            "aid" to "8662", "app_name" to "novelread", "version_code" to "74532", "version_name" to "7.4.5.32",
+            "channel" to "update_64", "device_type" to "25053RT47C", "os_version" to "16",
+            "iid" to "1000000000000002", "cdid" to "00000000-0000-4000-8000-000000000001", "device_id" to "1000000000000001",
+        )
+        val entropy = ByteArray(16) { (it + 1).toByte() }
+        val (q, h) = HGCurrentPlayer.signPlaybackV5(
+            pairs = pairs,
+            nowMillis = 1795500000123L,
+            body = """{"test":1}""".toByteArray(),
+            includeBodyHeaders = true,
+            entropy = entropy,
+            processNonce = "fixedProcessNonce_000123",
+            processStarted = 1700000000000L,
+            field21 = 312,
+        )
+        assertEquals(
+            "aid=8662&app_name=novelread&version_code=74532&version_name=7.4.5.32&channel=update_64&device_type=25053RT47C&os_version=16&iid=1000000000000002&cdid=00000000-0000-4000-8000-000000000001&device_id=1000000000000001&_rticket=1795500000150",
+            q,
+        )
+        assertEquals("1795500000", h["x-khronos"])
+        assertEquals("BQYHCBASuL65vfZGYSox1hnwyZB2YUGk7FjoLSo2Vo/XGzDK", h["x-helios"])
+        assertEquals(
+            "5ScFa81sSqGpUggo35KrR8JKyT0JCgABMootBg8UAf0DWL+Z40FS4c6If5a4H+wLyhAjkaSOe8V2FEY2SGCKlwmL+YJosK5cW72mO/hD6eHlyWO4o4EmOONZ/SKUpJ7TrWfi9KTjgndRtWFz0rpClBmfZC+f7hu1RqMhCvtT4AMPaKoe9fW3/VEoyWOHTRCK/s5uTbm0Qyv0gZARqU+9S2uBEHLTFHGFP/PsZr8PDWzWv2c6h3xGtfWZTbSa3de8S9aSPs0Z0rUNPcEMNHSO0t+G2fPEV0V0/nc7o0vZtXFDixR6j9io+h8402vfwu7Y8gNKqyOtN4T1QE8FxjlbD3X38iNMusJ3Pi3ZGIQBz6hVjmhIwm+exmTmj6t8ORR/gA6CndcJIqcpDq3kYBH7WqA8xzBNN1bFduUFn43Dtklvz4jhWPJo0zpGB9cHBX3Z8bKqWidiod226NGxOac+a4vh9Lyg3mYT6yw5ZKZ7Rdfo4OfFZv2kPgTPZ7s0iqoEmMMEsBNseX/DEtmssN3Ebd2IJosc3kBCF+JevSs6YPzUCwAKFZp7N5G7arc/0Es7r+GImcAlxk2JfcOKoSFhbikrGYaX1qYtWk69UZRiExQIqImvfmUVMytS/k/9VHX9FpmY/6f4//+n+P8LDA==",
+            h["x-medusa"],
+        )
+        assertEquals("44E7A186DB2C24F55E9BF22E427DF2AD", h["x-ss-stub"])
+        assertNull(h["x-argus"])
+        assertNull(h["x-gorgon"])
+        assertNull(h["x-ladon"])
+    }
 }

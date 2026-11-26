@@ -90,7 +90,7 @@ struct PlayerTech: Equatable {
             if at.mediaType == .video {
                 t.codec = codecName(CMFormatDescriptionGetMediaSubType(d))
                 let fps = track.currentVideoFrameRate > 0 ? track.currentVideoFrameRate : ((try? await at.load(.nominalFrameRate)) ?? 0)
-                t.fps = Int(fps.rounded())
+                if fps.isFinite, fps > 0 { t.fps = Int(fps.rounded()) }
                 if let tf = CMFormatDescriptionGetExtension(d, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String,
                    tf == (kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String) || tf == (kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String) {
                     t.hdr = true

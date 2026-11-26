@@ -121,7 +121,9 @@ final class NovelPageView: UIView {
     let ref: NovelPageRef
     private let header = UILabel()
     private let footer = UILabel()
-    private let textView = UITextView()
+    // Force TextKit 1 (`NSLayoutManager`) to match `NovelLayout.paginate` pixel-for-pixel;
+    // iOS 16+'s default TextKit 2 computes taller CJK line heights and clips 1-2 lines at the bottom.
+    private let textView = UITextView(usingTextLayoutManager: false)
     private var insets: UIEdgeInsets = .zero
 
     init(ref: NovelPageRef, paginator: NovelPaginator, insets: UIEdgeInsets, highlight: NovelHighlight?) {

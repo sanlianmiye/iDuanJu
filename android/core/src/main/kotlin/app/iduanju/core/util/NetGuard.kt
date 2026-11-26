@@ -27,13 +27,23 @@ object NetGuard {
         return false
     }
 
+    private fun isIPv6ULA(ip: String): Boolean {
+        val a = try { InetAddress.getByName(ip) } catch (_: Exception) { return false }
+        return a is Inet6Address && (a.address[0].toInt() and 0xfe) == 0xfc
+    }
+
     fun resolvesToBlocked(host: String): Boolean {
         val h = host.lowercase()
         if (h == "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true
-        synchronized(cache) { cache[h]?.let { (t, v) -> if (System.currentTimeMillis() - t < 300_000) return v } }
+        synchronized(cache) { cache[h]?.let { (t, v) -> if (!v && System.currentTimeMillis() - t < 300_000) return false } }
         val addrs = resolverOverride?.invoke(h) ?: try { InetAddress.getAllByName(h).map { it.hostAddress ?: "" } } catch (_: Exception) { emptyList() }
-        val blocked = addrs.any { isBlockedIP(it) }
-        synchronized(cache) { cache[h] = System.currentTimeMillis() to blocked }
+        val hasAllowed = addrs.any { !isBlockedIP(it) }
+        // Proxy Fake-IP (Clash / sing-box) often returns a 198.18.x.x IPv4 paired with an fc00::/18 IPv6;
+        // do not block the whole host for the companion Fake-IPv6 when an allowed address is present.
+        val blocked = addrs.any { isBlockedIP(it) && !(hasAllowed && isIPv6ULA(it)) }
+        if (!blocked && addrs.isNotEmpty()) {
+            synchronized(cache) { cache[h] = System.currentTimeMillis() to false }
+        }
         return blocked
     }
 }

@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct STVApp: App {
     @UIApplicationDelegateAdaptor(OrientationGate.self) private var orientation
+    @ObservedObject private var statusBar = StatusBarGate.shared
     init() {
         CFSolver.install()
         // Load plugin / 采集站 indexes before anything reads `Sites.all` or `SourceGate`.
@@ -46,6 +47,7 @@ struct STVApp: App {
                 }
             }
             .tint(STVTheme.accent)
+            .statusBarHidden(statusBar.hidden)
             .task {
                 await CFCookies.restoreFromWebKit()
                 #if DEBUG

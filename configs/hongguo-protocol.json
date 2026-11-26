@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "configVersion": 2,
+  "notes": "7.4.5.32 profile, medusa field21=312 (real app value; 377 is rejected since 2026-11-23), preload/v1 primary, video_tab GET secondary, preferFallbackIdentity=true (fresh anonymous devices currently soft-rejected)",
+  "preferFallbackIdentity": true,
+  "medusa": { "field21": 312 },
+  "appQuery": [
+    "aid=8662",
+    "app_name=novelread",
+    "version_code=74532",
+    "version_name=7.4.5.32",
+    "update_version_code=74532",
+    "manifest_version_code=74532",
+    "os=android",
+    "ssmix=a",
+    "channel=update_64",
+    "device_platform=android",
+    "device_type=25053RT47C",
+    "device_brand=Redmi",
+    "os_version=16",
+    "os_api=36",
+    "ac=wifi",
+    "language=zh",
+    "host_abi=arm64-v8a"
+  ],
+  "preload": {
+    "hosts": ["reading.snssdk.com", "api5-normal-sinfonlinea.fqnovel.com", "api5-normal-sinfonlineb.fqnovel.com"],
+    "path": "/novel/player/multi_video_model/preload/v1",
+    "drScene": "preload",
+    "deviceLevel": 2
+  },
+  "tab": {
+    "hosts": ["api5-normal-sinfonlineb.fqnovel.com", "api5-normal-hl.fqnovel.com"],
+    "path": "/reading/bookapi/video_tab/multi_video_model/v1/",
+    "deviceLevel": 1
+  },
+  "fallbackIdentity": {
+    "did": "1624456208323876",
+    "iid": "1624456208327972",
+    "cdid": "91d56f7e-c027-4ce9-9a3c-229d59a13c3b",
+    "openudid": "56a962410c494bba"
+  }
+}

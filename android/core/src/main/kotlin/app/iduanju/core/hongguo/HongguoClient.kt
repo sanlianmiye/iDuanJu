@@ -5,6 +5,8 @@ import app.iduanju.core.util.GoURL
 import app.iduanju.core.util.J
 import app.iduanju.core.util.ProviderException
 import app.iduanju.core.util.u
+import okhttp3.CookieJar
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,6 +19,9 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
 import java.io.ByteArrayOutputStream
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Direct-to-upstream port of iOS HongguoClient (rank / detail / resolve).
@@ -24,21 +29,25 @@ import java.io.ByteArrayOutputStream
  */
 object HGNet {
     @Volatile var playerUsesSystemProxy: Boolean = false
+    /** Optional test-only HTTP client override (e.g. binding to physical NIC when a host TUN VPN is active). */
+    @Volatile var clientOverride: OkHttpClient? = null
 }
 
 class HongguoClient(
     val dataDir: File,
-    private val http: OkHttpClient = HGDevice.defaultHttp(),
+    private val http: OkHttpClient = HGNet.clientOverride ?: HGDevice.defaultHttp(),
 ) {
     private val playerHttpDirect: OkHttpClient = OkHttpClient.Builder()
         .proxy(Proxy.NO_PROXY)
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
+        .cookieJar(CookieJar.NO_COOKIES)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
     private val playerHttpSystem: OkHttpClient = playerHttpDirect.newBuilder().proxy(null).build()
     /** iOS parity: the player session bypasses proxies. [HGNet.playerUsesSystemProxy] is a developer escape hatch (emulator egress). */
-    private val playerHttp: OkHttpClient get() = if (HGNet.playerUsesSystemProxy) playerHttpSystem else playerHttpDirect
+    private val playerHttp: OkHttpClient
+        get() = HGNet.clientOverride ?: if (HGNet.playerUsesSystemProxy) playerHttpSystem else playerHttpDirect
 
     init { HGDetailExtras.parser = this }
 
@@ -52,6 +61,8 @@ class HongguoClient(
     init {
         dataDir.mkdirs()
         HGPlayerDevice.storageDir = dataDir
+        HGProtocol.load(dataDir)
+        HGProtocol.refreshAsync(http, dataDir)
     }
 
     companion object {
@@ -125,7 +136,16 @@ class HongguoClient(
         }
     }
 
-    fun resetDevice() { synchronized(deviceLock) { device = null; HGDevice.reset(dataDir) } }
+    fun resetDevice() {
+        synchronized(deviceLock) { device = null; HGDevice.reset(dataDir) }
+        synchronized(this) {
+            playerIdentity = null
+            playerRejected.clear()
+            playerBlockedUntil = 0L
+            HGOneShotDevice.reset(dataDir)
+        }
+        synchronized(resolveCache) { resolveCache.clear() }
+    }
 
     @Volatile private var lastAutoReregisterMs = 0L
     private val autoReregisterMinIntervalMs = 30_000L
@@ -203,7 +223,7 @@ class HongguoClient(
             "&ac=wifi&channel=ry_hongguo_offlinestore_04&aid=8662&app_name=novelread" +
             "&version_code=73332&version_name=7.3.3.32&device_platform=android&os=android&ssmix=a&device_type=sdk_gphone64_arm64&device_brand=google" +
             "&language=en&os_api=35&os_version=15&manifest_version_code=73332&resolution=1080*2400&dpi=420&update_version_code=73332" +
-            "&_rticket=$rt&&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
+            "&_rticket=$rt&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
             "&player_so_load=1&is_android_pad_screen=0&rom_version=sdk_gphone64_arm64-userdebug+15+AE3A.240806.043+12960925+dev-keys" +
             "&cdid=22daeba8-ef23-4742-abbe-c41bc3d6d4c8"
 
@@ -351,8 +371,14 @@ class HongguoClient(
                 val tm = J.dict(tab)
                 if (!(J.int(tm.opt("tab_type")) == 11 || J.str(tm.opt("title")) == "综合")) continue
                 val items = ArrayList<HGSeries>(); val seen = HashSet<String>()
+                val lands = ArrayList<HGDetailExtras.SeriesLandRef>()
                 for (c in J.arr(tm.opt("data"))) {
                     val cm = J.dict(c)
+                    val land = HGDetailExtras.seriesLandFromCell(cm)
+                    if (land.stickIds.isNotEmpty()) {
+                        lands.add(land)
+                        continue
+                    }
                     var vds = J.arr(cm.opt("video_data"))
                     if (vds.isEmpty()) (cm.opt("video_data") as? JSONObject)?.let { vds = listOf(it) }
                     val fallbackSid = firstID(cm, "book_id", "search_result_id")
@@ -360,10 +386,17 @@ class HongguoClient(
                         val vm = J.dict(v)
                         if (contentFilter != HGContentFilter.all && contentFilterOf(vm) != contentFilter) continue
                         val s = parseVideoData(vm)
-                        if (s.seriesId.isEmpty()) s.seriesId = fallbackSid
-                        if (s.seriesId.isEmpty() && s.title.isEmpty()) continue
-                        if (s.seriesId.isNotEmpty() && !seen.add(s.seriesId)) continue
+                        if (s.seriesId.isEmpty() && s.title.isNotEmpty()) s.seriesId = fallbackSid
+                        if (!looksSID(s.seriesId) || s.title.isEmpty()) continue
+                        if (!seen.add(s.seriesId)) continue
                         items.add(s)
+                    }
+                }
+                for (land in lands) {
+                    val more = try { HGDetailExtras.seriesLanding(this, land.stickIds, land.from, land.query, land.bookId) } catch (_: Exception) { emptyList() }
+                    for (s in more) {
+                        if (!looksSID(s.seriesId) || s.title.isEmpty()) continue
+                        if (seen.add(s.seriesId)) items.add(s)
                     }
                 }
                 val next = J.int(tm.opt("next_offset"))
@@ -463,6 +496,10 @@ class HongguoClient(
         return HGPage(items, J.bool(data.opt("has_more")), J.int(data.opt("next_offset")), null, J.str(data.opt("session_id")).ifEmpty { null })
     }
 
+    private val detailPool = java.util.concurrent.Executors.newCachedThreadPool { r ->
+        Thread(r, "hg-detail").apply { isDaemon = true }
+    }
+
     // ---- detail ----
     fun detail(seriesId: String, web: Boolean = true): HGSeriesDetail {
         val body = mapOf(
@@ -474,42 +511,61 @@ class HongguoClient(
             ),
             "dr_scene" to "preload", "series_id" to seriesId,
         )
-        // no retry on soft-rejected detail preload (iOS bb23241); preload / directory / landing / web run concurrently (iOS async let)
-        val pool = java.util.concurrent.ForkJoinPool.commonPool()
-        val detailF = java.util.concurrent.CompletableFuture.supplyAsync({ try { postJSON(URL_DETAIL, detailQuery(nowMs()), J.encodeSorted(body), retries = 0) } catch (_: Exception) { null } }, pool)
-        val dirF = java.util.concurrent.CompletableFuture.supplyAsync({ try { bookDirectory(seriesId) } catch (_: Exception) { null } }, pool)
-        val landedF = java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.seriesLanding(this, seriesId, maxPages = 2) } catch (_: Exception) { null } }, pool)
-        val webF = if (web) java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null } }, pool) else null
-        val detailJ = detailF.get()
-        val dirJ = dirF.get()
-        val landed = landedF.get()
-        val webD = webF?.get()
+        // Dedicated IO pool (never starves ForkJoinPool.commonPool on low-core mobile devices)
+        val detailF = java.util.concurrent.CompletableFuture.supplyAsync({ try { postJSON(URL_DETAIL, detailQuery(nowMs()), J.encodeSorted(body), retries = 0) } catch (_: Exception) { null } }, detailPool)
+        val dirF = java.util.concurrent.CompletableFuture.supplyAsync({ try { bookDirectory(seriesId) } catch (_: Exception) { null } }, detailPool)
+        val landedF = java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.seriesLanding(this, seriesId, maxPages = 2) } catch (_: Exception) { null } }, detailPool)
+        val webF = if (web) java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null } }, detailPool) else null
+        val detailJ = runCatching { detailF.get(12, TimeUnit.SECONDS) }.getOrNull()
+        val dirJ = runCatching { dirF.get(15, TimeUnit.SECONDS) }.getOrNull()
+        val landed = runCatching { landedF.get(8, TimeUnit.SECONDS) }.getOrNull()
+        var webD = webF?.let { runCatching { it.get(10, TimeUnit.SECONDS) }.getOrNull() }
         var vd = JSONObject()
         if (detailJ != null && J.str(detailJ.opt("code")) == "0") {
             vd = J.dict(J.dict(J.dict(detailJ.opt("data")).opt(seriesId)).opt("video_data"))
         }
         val info = J.dict(J.dict(dirJ?.opt("data")).opt("book_info"))
         if (vd.length() == 0) {
-            if (dirJ == null) throw ProviderException.upstream("详情获取失败")
-            lastDetailRoute = "directory"
-            val data = J.dict(dirJ.opt("data"))
-            val eps = ArrayList<HGEpisode>()
-            J.arr(data.opt("item_data_list")).forEachIndexed { i, raw ->
-                val m = J.dict(raw)
-                val vid = J.firstNonEmpty(J.str(m.opt("item_id")), J.str(m.opt("vid")))
-                if (vid.isEmpty()) return@forEachIndexed
-                val n = J.int(m.opt("chapter_index"))
-                eps.add(HGEpisode(if (n > 0) n else i + 1, vid, 0, J.str(m.opt("title"))))
+            if (dirJ != null) {
+                lastDetailRoute = "directory"
+                val data = J.dict(dirJ.opt("data"))
+                val eps = ArrayList<HGEpisode>()
+                J.arr(data.opt("item_data_list")).forEachIndexed { i, raw ->
+                    val m = J.dict(raw)
+                    val vid = J.firstNonEmpty(J.str(m.opt("item_id")), J.str(m.opt("vid")))
+                    if (vid.isEmpty()) return@forEachIndexed
+                    val n = J.int(m.opt("chapter_index"))
+                    eps.add(HGEpisode(if (n > 0) n else i + 1, vid, 0, J.str(m.opt("title"))))
+                }
+                if (eps.isEmpty() && webD == null) {
+                    webD = try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null }
+                }
+                val title = J.firstNonEmpty(J.str(info.opt("book_name")), J.str(info.opt("original_book_name")), webD?.title.orEmpty())
+                val cover = J.firstNonEmpty(J.str(info.opt("thumb_url")), webD?.cover.orEmpty())
+                val total = maxOf(J.int(info.opt("serial_count")), eps.size, webD?.totalEps ?: 0)
+                if (eps.isNotEmpty() || title.isNotEmpty()) {
+                    val related = HGDetailExtras.loadRelatedSeries(seriesId, title, cover, total, JSONObject(), landed)
+                    return HGDetailExtras.enrich(HGSeriesDetail(
+                        seriesId = seriesId, title = title, cover = cover, desc = J.str(info.opt("abstract")),
+                        author = J.str(info.opt("author")), actors = names(info.opt("roles"), info.opt("role")),
+                        onlineTime = J.unix(info.opt("create_time")), totalEps = total, episodes = eps, relatedSeries = related,
+                    ), webD)
+                }
             }
-            val title = J.firstNonEmpty(J.str(info.opt("book_name")), J.str(info.opt("original_book_name")))
-            val cover = J.str(info.opt("thumb_url"))
-            val total = maxOf(J.int(info.opt("serial_count")), eps.size)
-            val related = HGDetailExtras.loadRelatedSeries(seriesId, title, cover, total, JSONObject(), landed)
-            return HGDetailExtras.enrich(HGSeriesDetail(
-                seriesId = seriesId, title = title, cover = cover, desc = J.str(info.opt("abstract")),
-                author = J.str(info.opt("author")), actors = names(info.opt("roles"), info.opt("role")),
-                onlineTime = J.unix(info.opt("create_time")), totalEps = total, episodes = eps, relatedSeries = related,
-            ), webD)
+            // Independent 3rd fallback: official web page (hongguoduanju.com _ROUTER_DATA carries full vid_list + metadata)
+            if (webD == null) webD = try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null }
+            val w = webD
+            if (w != null && (w.episodes.isNotEmpty() || w.title.isNotEmpty())) {
+                lastDetailRoute = "web"
+                val total = maxOf(w.totalEps, w.episodes.size)
+                val related = HGDetailExtras.loadRelatedSeries(seriesId, w.title, w.cover, total, JSONObject(), landed)
+                return HGDetailExtras.enrich(HGSeriesDetail(
+                    seriesId = seriesId, title = w.title, cover = w.cover, desc = w.intro,
+                    actors = w.cast.map { it.name }, onlineTime = w.onlineTime,
+                    totalEps = total, episodes = w.episodes, relatedSeries = related,
+                ), w)
+            }
+            throw ProviderException.upstream("详情获取失败")
         }
         lastDetailRoute = "preload"
         val eps = ArrayList<HGEpisode>()
@@ -530,7 +586,43 @@ class HongguoClient(
         ), webD)
     }
 
+    private fun isDirOk(j: JSONObject): Boolean {
+        val code = J.str(j.opt("code"))
+        if (!(code == "0" || code.uppercase() == "SUCCESS" || J.str(j.opt("message")).uppercase() == "SUCCESS")) return false
+        val data = J.dict(j.opt("data"))
+        return data.length() > 0 && (J.arr(data.opt("item_data_list")).isNotEmpty() || J.dict(data.opt("book_info")).length() > 0)
+    }
+
     private fun bookDirectory(sid: String): JSONObject {
+        var lastErr: Exception = ProviderException.upstream("directory 请求失败")
+        // 1) Fast unsigned playerQuery path
+        try {
+            val now = nowMs()
+            val rb = Request.Builder().url(URL_BOOK_DIR + playerQuery(now) + "&book_id=$sid")
+                .header("User-Agent", UA)
+                .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+                .header("x-ss-dp", "8662").header("x-ss-req-ticket", now.toString())
+                .header("x-khronos", (now / 1000).toString()).header("sdk-version", "2")
+                .header("passport-sdk-version", "5051452")
+            val j = send(rb.build(), retries = 0)
+            if (isDirOk(j)) return j
+            lastErr = ProviderException.upstream("directory code=${J.str(j.opt("code"))}")
+        } catch (e: Exception) {
+            lastErr = e
+            if (!hasPureOverride()) runCatching { HGPlayerDevice.remint() }
+        }
+        // 2) Registered device + full 6-header HGSign fallback (survives minted-ID rate limits / soft-rejects)
+        try {
+            val d = ensureDevice()
+            val u = URL_BOOK_DIR + listQuery(d, nowMs()) + "&book_id=$sid"
+            val j = list(u, signed = true)
+            if (isDirOk(j)) return j
+            lastErr = ProviderException.upstream("directory(signed) code=${J.str(j.opt("code"))}")
+        } catch (e: Exception) {
+            lastErr = e
+        }
+        // 3) Brief backoff + fresh playerQuery retry for transient 100103 / network blips
+        Thread.sleep(500)
         val now = nowMs()
         val rb = Request.Builder().url(URL_BOOK_DIR + playerQuery(now) + "&book_id=$sid")
             .header("User-Agent", UA)
@@ -538,12 +630,9 @@ class HongguoClient(
             .header("x-ss-dp", "8662").header("x-ss-req-ticket", now.toString())
             .header("x-khronos", (now / 1000).toString()).header("sdk-version", "2")
             .header("passport-sdk-version", "5051452")
-        val j = send(rb.build(), retries = 1)
-        val code = J.str(j.opt("code"))
-        if (!(code == "0" || code.uppercase() == "SUCCESS" || J.str(j.opt("message")).uppercase() == "SUCCESS")) {
-            throw ProviderException.upstream("directory code=$code")
-        }
-        return j
+        val j = send(rb.build(), retries = 0)
+        if (isDirOk(j)) return j
+        throw lastErr
     }
 
     // ---- resolve ----
@@ -563,29 +652,262 @@ class HongguoClient(
     }
 
     @Synchronized fun resolveFresh(vid: String): HGResolvedVideo {
-        for (attempt in 0 until 3) {
-            val identity = purePlayerIds()
-            try {
-                for (level in listOf(3, 4)) {
-                    var result: HGResolvedVideo? = null
-                    try { result = resolvePure(vid, level, identity) }
-                    catch (_: PlayerEmptyBody) {
-                        for (path in listOf("/novel/player/multi_video_model/v1", "/novel/player/multi_video_model/player/v1")) {
-                            try { result = resolveCurrentBatch(vid, level, identity, path); break } catch (_: PlayerEmptyBody) { }
+        require(vid.matches(Regex("[0-9]{1,30}"))) { "红果分集 ID 无效" }
+        var lastErr: Exception = ProviderException.upstream("没有可用播放流")
+
+        fun tryIdentity(identity: HGOneShotDevice.Identity, routeLabel: String): HGResolvedVideo? {
+            return try {
+                val r = try {
+                    resolvePreloadV5(vid, identity)
+                } catch (_: PlayerEmptyBody) {
+                    if (identity.registeredAt > 0L && nowMs() - identity.registeredAt < 8_000L) {
+                        Thread.sleep(1_500L)
+                        try {
+                            resolvePreloadV5(vid, identity)
+                        } catch (_: PlayerEmptyBody) {
+                            resolveVideoTabV5(vid, identity)
                         }
+                    } else {
+                        resolveVideoTabV5(vid, identity)
                     }
-                    val r = result ?: throw PlayerEmptyBody()
-                    if (r.err == BYTEVC2 && level == 3) continue
-                    lastPureRoute = if (hasPureOverride()) "override-current" else "registered-current"
+                }
+                if (r.err == null && r.streams.isNotEmpty()) {
+                    lastPureRoute = routeLabel
                     return r
                 }
+                lastErr = ProviderException.upstream(r.err ?: "没有可用播放流")
+                null
             } catch (e: PlayerEmptyBody) {
-                if (hasPureOverride()) throw e
-                playerRejected += identity.did; playerIdentity = null
-                if (attempt == 2) { playerBlockedUntil = nowMs() + 30_000; throw ProviderException.upstream("取流被上游空包拒绝，已尝试 3 个匿名身份，请稍后重试") }
+                lastErr = e
+                throw e
             }
         }
-        throw ProviderException.upstream("没有可用播放流")
+
+        val primary = try { purePlayerIds() } catch (e: Exception) { lastErr = e; null }
+        if (primary != null) {
+            try {
+                val label = when {
+                    hasPureOverride() -> "override-v5"
+                    primary.did == fallbackIdentity().did -> "verified-v5"
+                    else -> "registered-v5"
+                }
+                tryIdentity(primary, label)?.let { return it }
+            } catch (_: PlayerEmptyBody) {
+                if (!hasPureOverride()) {
+                    playerRejected += primary.did
+                    if (playerIdentity?.did == primary.did) {
+                        playerIdentity = null
+                        HGOneShotDevice.reset(dataDir)
+                    }
+                }
+            } catch (e: Exception) {
+                lastErr = e
+            }
+        }
+
+        if (!hasPureOverride()) {
+            val secondary = if (primary?.did == fallbackIdentity().did) {
+                runCatching { HGOneShotDevice.registerV5(playerHttp) }.getOrNull()
+            } else {
+                fallbackIdentity()
+            }
+            if (secondary != null && secondary.did !in playerRejected) {
+                try {
+                    val label = if (secondary.did == fallbackIdentity().did) "verified-v5" else "registered-v5"
+                    tryIdentity(secondary, label)?.let {
+                        playerIdentity = secondary
+                        HGOneShotDevice.save(dataDir, secondary)
+                        return it
+                    }
+                } catch (e: Exception) {
+                    lastErr = e
+                }
+            }
+        }
+
+        HGProtocol.refreshAsync(http, dataDir, force = true)
+        resolveWebFallback(vid)?.let { web ->
+            lastPureRoute = "web-fallback"
+            return web
+        }
+        if (lastErr is PlayerEmptyBody) {
+            throw ProviderException.upstream("取流被上游空包拒绝，请稍后重试或在「我的」重置红果设备")
+        }
+        throw lastErr
+    }
+
+    private fun fallbackIdentity(): HGOneShotDevice.Identity =
+        HGProtocol.current.fallbackIdentity ?: HGOneShotDevice.FALLBACK_VERIFIED
+
+    private val preloadHostsCursor = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
+    private fun orderedPreloadHosts(): List<String> {
+        val hosts = HGProtocol.current.preloadHosts
+        val first = preloadHostsCursor.get()?.takeIf { it in hosts } ?: return hosts
+        return listOf(first) + hosts.filter { it != first }
+    }
+
+    private fun v5BasePairs(identity: HGOneShotDevice.Identity): List<Pair<String, String>> =
+        HGProtocol.current.appQuery + listOf(
+            "iid" to identity.iid,
+            "cdid" to identity.cdid,
+            "device_id" to identity.did,
+        )
+
+    private fun resolvePreloadV5(vid: String, identity: HGOneShotDevice.Identity): HGResolvedVideo {
+        val cfg = HGProtocol.current
+        val rawBody = J.encodeSorted(mapOf(
+            "biz_param" to mapOf(
+                "detail_page_version" to 0,
+                "device_level" to cfg.preloadDeviceLevel,
+                "disable_digg_stat" to false,
+                "disable_video_relate_book" to false,
+                "need_all_video_definition" to true,
+                "need_mp4_align" to false,
+                "use_os_player" to false,
+                "use_server_dns" to false,
+                "video_platform" to 1024,
+            ),
+            "dr_scene" to cfg.preloadDrScene,
+            "mixed_video_id_map" to mapOf("1004" to listOf(vid)),
+        ))
+        val gz = gzip(rawBody)
+        val pairs = v5BasePairs(identity)
+        var sawEmpty = false
+        var lastErr: Exception = PlayerEmptyBody()
+        for (host in orderedPreloadHosts()) {
+            val now = signingMillis()
+            val (q, headers) = HGCurrentPlayer.signPlaybackV5(pairs, now, gz, includeBodyHeaders = true)
+            val rb = Request.Builder()
+                .url("https://$host${cfg.preloadPath}?$q")
+                .post(gz.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .header("User-Agent", "okhttp/4.12.0")
+                .header("Accept", "application/json")
+                .header("Content-Encoding", "gzip")
+            for ((k, v) in headers) rb.header(k, v)
+            try {
+                playerHttp.newCall(rb.build()).execute().use { resp ->
+                    if (resp.code == 429 || resp.code >= 500) {
+                        lastErr = ProviderException.upstream("preload/v1 HTTP ${resp.code}")
+                        return@use
+                    }
+                    if (resp.code != 200) throw ProviderException.upstream("preload/v1 HTTP ${resp.code}")
+                    val bytes = resp.body?.bytes() ?: ByteArray(0)
+                    if (bytes.isEmpty()) {
+                        sawEmpty = true
+                        System.err.println("[HG] preload/v1 HTTP 200 empty host=$host")
+                        return@use
+                    }
+                    val j = J.parse(bytes)
+                    for (code in listOf(j.opt("code"), J.dict(j.opt("BaseResp")).opt("StatusCode"))) {
+                        if (code != null && J.str(code) != "0") {
+                            throw ProviderException.upstream("preload/v1 code=${J.str(code)} ${J.str(j.opt("message"))}")
+                        }
+                    }
+                    val data = J.dict(j.opt("data"))
+                    val entries = data.optJSONObject("1004") ?: data
+                    val entry = J.dict(entries.opt(vid))
+                    val model = videoModelJSON(entry.opt("video_model"))
+                        ?: throw ProviderException.upstream("preload/v1 缺少请求的分集")
+                    preloadHostsCursor.set(host)
+                    return materialize(model, vid)
+                }
+            } catch (e: ProviderException) {
+                lastErr = e
+            } catch (e: Exception) {
+                lastErr = e
+            }
+        }
+        if (sawEmpty) throw PlayerEmptyBody()
+        throw lastErr
+    }
+
+    private fun resolveVideoTabV5(vid: String, identity: HGOneShotDevice.Identity): HGResolvedVideo {
+        val cfg = HGProtocol.current
+        val pairs = v5BasePairs(identity) + listOf(
+            "video_id" to vid,
+            "video_id_type" to "0",
+            "device_level" to cfg.tabDeviceLevel.toString(),
+            "need_all_video_definition" to "1",
+            "need_mp4_align" to "0",
+            "use_os_player" to "0",
+            "video_platform" to "1024",
+            "source" to "0",
+            "from_video_id" to "",
+        )
+        var sawEmpty = false
+        var lastErr: Exception = PlayerEmptyBody()
+        for (host in cfg.tabHosts) {
+            val now = signingMillis()
+            val (q, headers) = HGCurrentPlayer.signPlaybackV5(pairs, now, ByteArray(0), includeBodyHeaders = false)
+            val rb = Request.Builder()
+                .url("https://$host${cfg.tabPath}?$q")
+                .get()
+                .header("User-Agent", "com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)")
+                .header("Accept", "application/json; charset=utf-8")
+                .header("Accept-Language", "zh-CN,zh;q=0.9")
+            for ((k, v) in headers) rb.header(k, v)
+            try {
+                playerHttp.newCall(rb.build()).execute().use { resp ->
+                    if (resp.code != 200) {
+                        lastErr = ProviderException.upstream("video_tab HTTP ${resp.code}")
+                        return@use
+                    }
+                    val bytes = resp.body?.bytes() ?: ByteArray(0)
+                    if (bytes.isEmpty()) {
+                        sawEmpty = true
+                        System.err.println("[HG] video_tab HTTP 200 empty host=$host")
+                        return@use
+                    }
+                    val j = J.parse(bytes)
+                    for (code in listOf(j.opt("code"), J.dict(j.opt("BaseResp")).opt("StatusCode"))) {
+                        if (code != null && J.str(code) != "0") {
+                            throw ProviderException.upstream("video_tab code=${J.str(code)} ${J.str(j.opt("message"))}")
+                        }
+                    }
+                    val data = J.dict(j.opt("data"))
+                    val bucket = data.optJSONObject("video_model_data") ?: data.optJSONObject("1004") ?: data
+                    val model = videoModelJSON(J.dict(bucket.opt(vid)).opt("video_model"))
+                        ?: throw ProviderException.upstream("video_tab 缺少请求的分集")
+                    return materialize(model, vid)
+                }
+            } catch (e: Exception) {
+                lastErr = e
+            }
+        }
+        if (sawEmpty) throw PlayerEmptyBody()
+        throw lastErr
+    }
+
+    private fun resolveWebFallback(vid: String): HGResolvedVideo? {
+        return try {
+            val body = J.encodeSorted(mapOf("item_id" to vid, "force_refresh" to false))
+            val req = Request.Builder()
+                .url("https://hongguoduanju.com/api/video/protected/fallback-play-info")
+                .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 16; 25053RT47C) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .header("Accept", "application/json")
+                .header("Origin", "https://hongguoduanju.com")
+                .header("Referer", "https://hongguoduanju.com/")
+                .build()
+            playerHttp.newCall(req).execute().use { resp ->
+                if (resp.code != 200) return null
+                val raw = resp.body?.bytes() ?: return null
+                if (raw.isEmpty()) return null
+                val j = J.parse(raw)
+                val data = J.dict(j.opt("data")).takeIf { it.length() > 0 } ?: j
+                val url = J.firstNonEmpty(J.str(data.opt("play_url")), J.str(data.opt("main_url")), J.str(data.opt("url")))
+                if (!url.startsWith("http")) return null
+                val stream = HGStream(
+                    streamId = "web-$vid",
+                    quality = J.str(data.opt("definition")).ifEmpty { "360p" },
+                    url = url,
+                    key = "",
+                    kind = HGStreamKind.mp4Clear,
+                )
+                HGResolvedVideo(vid, url, null, J.double(data.opt("duration")), J.int64(data.opt("expire_time")), null, listOf(stream), note = "web")
+            }
+        } catch (_: Exception) { null }
     }
 
     /** Pure video_model level 3 then 4; an empty body means the device is rejected, so stop there. (result, softRejected) */
@@ -637,11 +959,32 @@ class HongguoClient(
     }
 
     @Synchronized private fun ensurePlayerIdentity(failedID: String = ""): HGOneShotDevice.Identity {
-        if (failedID.isNotEmpty()) { playerRejected += failedID; if (playerIdentity?.did == failedID) playerIdentity = null }
-        playerIdentity?.takeIf { it.did !in playerRejected && it.did != failedID && System.currentTimeMillis() - playerRegisteredAt < 7 * 60_000 }?.let { return it }
+        if (failedID.isNotEmpty()) {
+            playerRejected += failedID
+            if (playerIdentity?.did == failedID) playerIdentity = null
+        }
+        playerIdentity?.takeIf { it.isUsable && it.did !in playerRejected && it.did != failedID }?.let { return it }
+        HGOneShotDevice.load(dataDir)?.takeIf { it.did !in playerRejected && it.did != failedID }?.let { saved ->
+            playerIdentity = saved
+            playerRegisteredAt = saved.registeredAt
+            return saved
+        }
+        if (HGProtocol.current.preferFallbackIdentity) {
+            val fb = fallbackIdentity()
+            if (fb.isUsable && fb.did !in playerRejected && fb.did != failedID) {
+                playerIdentity = fb
+                playerRegisteredAt = 0L
+                return fb
+            }
+        }
         if (System.currentTimeMillis() < playerBlockedUntil) throw ProviderException.upstream("播放器设备注册冷却中，请稍后重试")
-        val id = HGOneShotDevice.register(playerHttp) ?: throw ProviderException.upstream("播放器设备注册失败")
-        playerIdentity = id; playerRegisteredAt = System.currentTimeMillis()
+        val id = HGOneShotDevice.registerV5(playerHttp) ?: run {
+            playerBlockedUntil = System.currentTimeMillis() + 20_000
+            throw ProviderException.upstream("播放器设备注册失败")
+        }
+        HGOneShotDevice.save(dataDir, id)
+        playerIdentity = id
+        playerRegisteredAt = id.registeredAt
         return id
     }
 
@@ -876,9 +1219,66 @@ class HongguoClient(
     }
 
     fun materialize(vm: JSONObject, vid: String): HGResolvedVideo {
-        if (hasInlineList(vm)) return parseVideoModel(vm, vid, keySeed(vm))
-        // fallback_api path omitted for M1 brevity when inline list present; still handle empty
-        return parseVideoModel(vm, vid, keySeed(vm))
+        val seed = keySeed(vm)
+        val inlineResult = if (hasInlineList(vm)) parseVideoModel(vm, vid, seed) else null
+        if (inlineResult != null && inlineResult.streams.isNotEmpty()) return inlineResult
+
+        val fb = fallbackAPI(vm.opt("fallback_api"))
+        if (fb.isEmpty()) return inlineResult ?: parseVideoModel(vm, vid, seed)
+        val parsed = fb.toHttpUrlOrNull() ?: throw ProviderException.upstream("fallback_api 地址无效")
+        val host = parsed.host.lowercase()
+        val trusted = listOf("fqnovel.com", "snssdk.com", "bytedanceapi.com", "byteimg.com", "pstatp.com")
+            .any { host == it || host.endsWith(".$it") }
+        if (!trusted) throw ProviderException.upstream("fallback_api 地址不受信任")
+
+        val candidates = LinkedHashSet<String>()
+        for (codec in listOf("1", "3")) {
+            candidates.add(parsed.newBuilder().setQueryParameter("codec_type", codec).build().toString())
+        }
+        candidates.add(parsed.toString())
+
+        var lastFallback: HGResolvedVideo? = inlineResult
+        for (target in candidates) {
+            val req = Request.Builder().url(target)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            try {
+                playerHttp.newCall(req).execute().use { resp ->
+                    if (resp.code != 200) return@use
+                    val data = resp.body?.bytes() ?: return@use
+                    if (data.isEmpty()) return@use
+                    val outer = J.parse(data)
+                    val vi = J.dict(outer.opt("video_info"))
+                    for (c in listOf(outer.opt("code") ?: outer.opt("Code"), vi.opt("code") ?: vi.opt("Code"))) {
+                        if (c != null && J.int(c) != 0) return@use
+                    }
+                    val info = J.dict(vi.opt("data"))
+                    if (info.length() == 0) return@use
+                    if (!info.has("video_duration") && vm.has("video_duration")) info.put("video_duration", vm.opt("video_duration"))
+                    if (!info.has("url_expire") && vm.has("url_expire")) info.put("url_expire", vm.opt("url_expire"))
+                    val r = parseVideoModel(info, vid, keySeed(info) ?: seed)
+                    lastFallback = r
+                    if (r.streams.isNotEmpty()) {
+                        return r.copy(note = "fallback_api")
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return lastFallback ?: parseVideoModel(vm, vid, seed)
+    }
+
+    private fun fallbackAPI(v: Any?): String {
+        return when (v) {
+            is String -> {
+                if (v.trim().startsWith("{")) {
+                    try { J.str(JSONObject(v).opt("fallback_api")) } catch (_: Exception) { v }
+                } else v
+            }
+            is org.json.JSONArray -> J.str(v.opt(0))
+            is JSONObject -> J.str(v.opt("fallback_api"))
+            else -> ""
+        }
     }
 
     private fun hasInlineList(vm: JSONObject): Boolean {
@@ -909,7 +1309,8 @@ class HongguoClient(
             val meta = J.dict(v.opt("video_meta")); val enc = J.dict(v.opt("encrypt_info"))
             val codec = J.firstNonEmpty(J.str(meta.opt("codec_type")), J.str(v.opt("codec_type"))).lowercase()
             if (codec == "bytevc2" || J.str(v.opt("gear_des_key")).lowercase().contains("bytevc2")) { vc2++; continue }
-            val primary = mediaURL(v.opt("main_url"), keySeed) ?: mediaURL(v.opt("backup_url"), keySeed) ?: continue
+            val alts = (listOf(v.opt("backup_url")) + J.arr(v.opt("backup_url_list"))).mapNotNull { mediaURL(it, keySeed) }
+            val primary = mediaURL(v.opt("main_url"), keySeed) ?: alts.firstOrNull() ?: continue
             var key = ""
             val spade = J.firstNonEmpty(J.str(enc.opt("spade_a")), J.str(v.opt("spade_a")))
             if (spade.isNotEmpty() || J.bool(enc.opt("encrypt")) || J.str(enc.opt("encryption_method")) == "cenc-aes-ctr") {
@@ -941,11 +1342,40 @@ class HongguoClient(
     }
 
     fun mediaURL(value: Any?, seed: ByteArray? = null): String? {
-        var address = J.str(value)
+        val raw = J.str(value)
+        if (raw.isEmpty()) return null
+        if (seed != null) {
+            decryptSpadeURL(raw, seed)?.takeIf { it.startsWith("http://") || it.startsWith("https://") }?.let { return it }
+        }
+        var address = raw
         if (!address.startsWith("http")) {
             Bytes.b64decode(address)?.let { address = String(it, Charsets.UTF_8) }
         }
         return if (address.startsWith("http://") || address.startsWith("https://")) address else null
+    }
+
+    internal fun decryptSpadeURL(value: String, seed: ByteArray): String? {
+        if (value.isEmpty()) return null
+        val b = Bytes.b64decode(value) ?: return null
+        if (b.size < 5 || b.u(0) != 0xa8 || b.u(2) != 0x01 || b.u(3) != 0x00) return null
+        val n = ((b.size - 4) / 16) * 16
+        if (n <= 0) return null
+        val h1 = Bytes.sha512(seed)
+        val h2 = Bytes.sha512(h1 + HGOneShotDevice.KDF_SALT)
+        val cipher = Cipher.getInstance("AES/CBC/NoPadding")
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            SecretKeySpec(h2.copyOfRange(0, 16), "AES"),
+            IvParameterSpec(h2.copyOfRange(16, 32)),
+        )
+        val plain = try { cipher.doFinal(b.copyOfRange(4, 4 + n)) } catch (_: Exception) { return null }
+        var end = plain.size
+        if (end > 0) {
+            val pad = plain.u(end - 1)
+            if (pad in 1..16 && pad <= end) end -= pad
+        }
+        while (end > 0 && plain[end - 1] == 0.toByte()) end--
+        return String(plain, 0, end, Charsets.UTF_8)
     }
 
     // ---- parsing ----

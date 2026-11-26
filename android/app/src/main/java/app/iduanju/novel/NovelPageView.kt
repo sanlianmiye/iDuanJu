@@ -101,8 +101,12 @@ internal class NovelPageView(context:Context):View(context) {
         val header=TextUtils.ellipsize(chapter,TextPaint(small),(width-2*margin),TextUtils.TruncateAt.END).toString()
         c.drawText(header,margin,15*density,small)
         val l=layout
-        if(l!=null){val bodySave=c.save();c.clipRect(margin,32*density,width-margin,32*density+bodyHeight)
-            c.translate(margin,32*density-l.getLineTop(firstLines[index]));l.draw(c);c.restoreToCount(bodySave)}
+        if(l!=null){
+            val firstTop=l.getLineTop(firstLines[index])
+            val clipH=if(index+1<firstLines.size) min(bodyHeight,(l.getLineTop(firstLines[index+1])-firstTop).toFloat()) else bodyHeight
+            val bodySave=c.save();c.clipRect(margin,32*density,width-margin,32*density+clipH)
+            c.translate(margin,32*density-firstTop);l.draw(c);c.restoreToCount(bodySave)
+        }
         val footer="${index+1}/${firstLines.size}";c.drawText(footer,width-margin-small.measureText(footer),height-10*density,small);c.restoreToCount(save)
     }
     override fun onDraw(c:Canvas){

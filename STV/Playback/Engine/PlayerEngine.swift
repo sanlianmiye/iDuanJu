@@ -2,11 +2,11 @@ import AVFoundation
 import AVKit
 import UIKit
 
-/// Which playback core plays an episode. MPVKit (`libmpv` + `FFmpeg` + `libdovi` + `libplacebo`, iOS 16+)
-/// is the default for Dolby Vision, HDR10, DTS/TrueHD/AC3/EAC3, and ASS subtitles; AVPlayer is the fallback
-/// for sources MPV cannot take (out-of-band AES keys via the resource loader, FairPlay) and for any failure.
+/// Which playback core plays an episode. System AVPlayer is the default (native Picture-in-Picture and
+/// lower power draw); MPVKit (`libmpv` + `FFmpeg` + `libdovi` + `libplacebo`, iOS 16+) is opt-in for
+/// Dolby Vision, HDR10, DTS/TrueHD/AC3/EAC3, and ASS subtitles, with AVPlayer fallback on failure.
 enum PlayerEngineKind: String, CaseIterable, Sendable {
-    case mpv, avplayer
+    case avplayer, mpv
     var label: String { self == .mpv ? "MPVKit (DV/DTS)" : "系统播放器" }
     var short: String { self == .mpv ? "MPV" : "AVPlayer" }
 }
@@ -21,9 +21,9 @@ enum PlayerEngineSettings {
                 if let k = PlayerEngineKind(rawValue: e) { return k }
             }
             #endif
-            guard let raw = UserDefaults.standard.string(forKey: key) else { return .mpv }
+            guard let raw = UserDefaults.standard.string(forKey: key) else { return .avplayer }
             if raw == "aether" { return .mpv }
-            return PlayerEngineKind(rawValue: raw) ?? .mpv
+            return PlayerEngineKind(rawValue: raw) ?? .avplayer
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
@@ -102,8 +102,11 @@ struct MediaTrack: Identifiable, Hashable, Sendable {
     var routeLabel: String { get }
     /// Real-time GPU sharpening level (0 = off, 1 = standard, 2 = strong).
     func setSharpen(_ level: Int)
+    /// Real-time SDR-to-HDR inverse tone mapping on SDR content.
+    func setSdrToHdr(_ enabled: Bool)
 }
 
 extension PlayerEngine {
     func setSharpen(_ level: Int) {}
+    func setSdrToHdr(_ enabled: Bool) {}
 }

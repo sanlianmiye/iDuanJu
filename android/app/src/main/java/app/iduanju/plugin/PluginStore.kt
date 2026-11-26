@@ -64,7 +64,15 @@ class PluginStore(private val ctx: Context,
         live[id]?.takeIf { it.inst.broken == null }?.let { return it }
         val text = File(root, "$id/bundle.idjplugin").takeIf { it.exists() }?.readText() ?: throw PluginException("E_INTERNAL", "插件未安装")
         val b = PluginBundle.parse(text)
-        val v = PluginVideo(PluginInstance(b, PluginHost(b.manifest, File(root, id), log = { log(id, it) }), ::QuickJSEngine))
+        val host = PluginHost(b.manifest, File(root, id), log = { log(id, it) }).apply {
+            onVerifyRequired = { url ->
+                app.iduanju.ui.components.SiteVerifyHost.requestUserVerificationBlocking(b.manifest.name, url) { rawCookies, ua ->
+                    importCookies(url, rawCookies)
+                    if (ua.isNotBlank()) learnedUA = ua
+                }
+            }
+        }
+        val v = PluginVideo(PluginInstance(b, host, ::QuickJSEngine))
         live[id] = v; v
     }
 

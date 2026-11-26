@@ -14,13 +14,21 @@ final class TVBoxPlayerController: ObservableObject {
     @Published private(set) var positionSec: Double = 0
     @Published private(set) var durationSec: Double = 0
     @Published private(set) var errorMsg: String?
-    @Published private(set) var engineKind: PlayerEngineKind = .mpv
+    @Published private(set) var engineKind: PlayerEngineKind = .avplayer
     @Published var fill: Bool = false {
         didSet { activeEngine.fill = fill }
     }
 
     private let av = AVPlayerEngine()
-    private lazy var mpv: MPVPlayerEngine? = try? MPVPlayerEngine()
+    private var mpvInstance: MPVPlayerEngine?
+    private var mpvInitAttempted = false
+    private var mpv: MPVPlayerEngine? {
+        if !mpvInitAttempted {
+            mpvInitAttempted = true
+            mpvInstance = try? MPVPlayerEngine()
+        }
+        return mpvInstance
+    }
     private var activeEngine: PlayerEngine
     private var loadTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
@@ -184,10 +192,14 @@ final class TVBoxPlayerController: ObservableObject {
         generation += 1
         loadTask?.cancel()
         loadTask = nil
+        tickTask?.cancel()
+        tickTask = nil
         activeEngine.onFailed = nil
         activeEngine.onEnded = nil
         av.stop()
-        mpv?.stop()
+        mpvInstance?.shutdown()
+        mpvInstance = nil
+        activeEngine = av
         isPlaying = false
         isBuffering = false
     }

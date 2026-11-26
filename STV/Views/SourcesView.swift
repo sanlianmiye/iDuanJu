@@ -54,7 +54,7 @@ struct SourcesView: View {
                             label("去广告", "nosign", sub: "去掉 HLS 片源里插播的广告片段（adjump、异域名短片段、AES 片源中的明文短片段、重复片段）；不会整段丢弃正片的分段标记")
                         }.padding(14).accessibilityIdentifier("settings.adstrip")
                         VStack(alignment: .leading, spacing: 10) {
-                            label("播放内核", "cpu", sub: "MPVKit（libmpv + FFmpeg + libdovi，兼容 iOS 16+，支持杜比视界/HDR10/DTS/TrueHD 与真实音轨/字幕）；遇到 CENC/FairPlay 或加载失败自动回退系统播放器")
+                            label("播放内核", "cpu", sub: "默认使用系统播放器（原生支持画中画小窗、功耗更低）；如需播放杜比视界/HDR10/DTS/TrueHD 或内置 ASS 字幕，可切换为 MPVKit（暂不支持画中画）")
                             Picker("播放内核", selection: Binding(get: { engineKind }, set: { engineKind = $0; PlayerEngineSettings.preferred = $0 })) {
                                 ForEach(PlayerEngineKind.allCases, id: \.self) { Text($0.label).tag($0) }
                             }
@@ -142,6 +142,9 @@ struct SourcesView: View {
         case .xvideos: "HLS 自适应 + MP4 · 需代理"
         case .xnxx: "HLS 自适应 + MP4 · 需代理"
         case .pornhub: "HLS 1080P/720P/480P · 需代理"
+        case .youporn: "HLS + MP4 多画质 · 需代理"
+        case .redtube: "HLS + MP4 多画质 · 需代理"
+        case .hqporner: "MP4 多画质（mydaddy.cc 嵌入页）· 需代理"
         default: s.pluginID != nil ? "JS 插件 · " + (PluginStore.snapshot(s.pluginID!)?.manifest.httpDomains.first ?? "") :
                  s.cmsKey != nil ? "苹果 CMS 采集站 · " + (CMSStore.site(s.cmsKey!).flatMap { URL(string: $0.api)?.host } ?? "") : s.siteHost
         }

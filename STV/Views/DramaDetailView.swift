@@ -8,16 +8,16 @@ struct EpisodeRange: Hashable {
 }
 
 enum EpisodeGroups {
-    /// Group size: 30 (≤300 eps), 50 (≤600), 60 (more). Small totals stay in one group.
-    static func size(for total: Int) -> Int {
-        if total <= 30 { return max(total, 1) }
-        if total <= 300 { return 30 }
-        if total <= 600 { return 50 }
+    /// Group size: 30 (≤300 eps), 50 (≤600), 60 (more). Tablet portrait uses 50 per tab so 8–10 col grids fill naturally.
+    static func size(for total: Int, groupLimit: Int = 30) -> Int {
+        if total <= groupLimit { return max(total, 1) }
+        if total <= 300 { return groupLimit }
+        if total <= 600 { return max(groupLimit, 50) }
         return 60
     }
-    static func ranges(total: Int) -> [EpisodeRange] {
+    static func ranges(total: Int, groupLimit: Int = 30) -> [EpisodeRange] {
         guard total > 0 else { return [] }
-        let g = size(for: total)
+        let g = size(for: total, groupLimit: groupLimit)
         if total <= g { return [EpisodeRange(0, total - 1)] }
         var out: [EpisodeRange] = []
         var i = 0
@@ -60,7 +60,10 @@ struct DramaDetailView: View {
     private var pinned: Bool { detailPinned }
     private var title: String { detail?.title ?? series.title }
 
-    private var useTwoPane: Bool { layout.tier == .expanded && detail != nil }
+    private var useTwoPane: Bool { layout.tier == .expanded && layout.isLandscape && detail != nil }
+    private var usePortraitEditorial: Bool { !useTwoPane && !layout.isLandscape && layout.tier != .compact && detail != nil }
+    private var isTabletLayout: Bool { useTwoPane || usePortraitEditorial }
+    private var epGroupLimit: Int { usePortraitEditorial ? 50 : 30 }
 
     /// ui-redesign 12 / 13: blurred poster-colour hero with a poster card, stats card, actions, tags, folding intro,
     /// 选集 before 系列 / 演员; a pinned nav once the hero scrolls away and a floating play bar once the main button does.
@@ -101,7 +104,7 @@ struct DramaDetailView: View {
                     .frame(width: 340)
 
                     ScrollView {
-                        detailBody(d)
+                        detailBody(d, showActions: false)
                             .padding(.bottom, 48)
                     }
                     .scrollIndicators(.hidden)
@@ -111,6 +114,20 @@ struct DramaDetailView: View {
                 .padding(.horizontal, 28)
                 .frame(maxWidth: 1160)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if usePortraitEditorial, let d = detail {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        portraitEditorialHero(d)
+                        detailBody(d, showActions: false)
+                    }
+                    .padding(.top, 60)
+                    .padding(.bottom, 64)
+                }
+                .coordinateSpace(name: "detail")
+                .compatOnScrolled(threshold: 236) { value in
+                    if detailPinned != value { detailPinned = value }
+                }
+                .scrollIndicators(.hidden)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -140,7 +157,7 @@ struct DramaDetailView: View {
         .ignoresSafeArea(edges: .top)
         .background(STVTheme.bg.ignoresSafeArea())
         .overlay(alignment: .top) { navBar }
-        .overlay(alignment: .bottom) { if !useTwoPane { playBar } }
+        .overlay(alignment: .bottom) { if !isTabletLayout { playBar } }
         .toolbar(.hidden, for: .navigationBar)
         .zoomDestination(series.id, ns)
         .task {
@@ -219,11 +236,13 @@ struct DramaDetailView: View {
 
     private var hero: some View {
         ZStack(alignment: .bottomLeading) {
-            // `.bd`: the poster itself, blurred 30 pt and saturated, bleeding past the hero edges.
-            CoverView(url: cover, corner: 0, maxPixelSize: 640, fallback: series.cover)
+            // `.bd`: the poster itself, blurred and saturated, bleeding past the hero edges.
+            // Reuses the already-cached poster synchronously on frame 0 and disables shimmer placeholder
+            // so opening the detail page never flashes a bright bar.
+            CoverView(url: cover, corner: 0, maxPixelSize: 640, fallback: series.cover, showPlaceholder: false)
                 .frame(maxWidth: .infinity).frame(height: 400)
-                .blur(radius: 22, opaque: true).saturation(1.15)
-                .drawingGroup(opaque: true)
+                .blur(radius: 22).saturation(1.15)
+                .drawingGroup()
                 .frame(height: 300).clipped()
                 .overlay(LinearGradient(stops: [.init(color: .black.opacity(0.30), location: 0), .init(color: .black.opacity(0.08), location: 0.34),
                                                .init(color: STVTheme.bg.opacity(0.74), location: 0.76), .init(color: STVTheme.bg, location: 1)],
@@ -261,21 +280,78 @@ struct DramaDetailView: View {
 
     // MARK: body
 
-    @ViewBuilder private func detailBody(_ d: HGSeriesDetail) -> some View {
+    @ViewBuilder private func portraitEditorialHero(_ d: HGSeriesDetail) -> some View {
+        ZStack(alignment: .leading) {
+            CoverView(url: cover, corner: 0, maxPixelSize: 640, fallback: series.cover, showPlaceholder: false)
+                .blur(radius: 22)
+                .opacity(0.32)
+                .overlay(
+                    LinearGradient(
+                        stops: [
+                            .init(color: STVTheme.surface.opacity(0.20), location: 0),
+                            .init(color: STVTheme.surface.opacity(0.76), location: 0.42),
+                            .init(color: STVTheme.surface.opacity(0.92), location: 1)
+                        ],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                )
+                .allowsHitTesting(false)
+
+            HStack(alignment: .center, spacing: 22) {
+                CoverView(url: cover, corner: 16, fallback: series.cover, a11yID: "detail.poster")
+                    .frame(width: 176, height: 235)
+                    .shadow(color: .black.opacity(0.42), radius: 16, y: 10)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    DSStatus(text: series.source.label, tone: .accent)
+                    Text(title)
+                        .font(.system(size: 26, weight: .heavy))
+                        .foregroundStyle(STVTheme.text)
+                        .lineLimit(2)
+                    if !heroMeta.isEmpty {
+                        Text(heroMeta)
+                            .font(.system(size: 14))
+                            .foregroundStyle(STVTheme.secondary)
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 10) {
+                        NavigationLink(value: Route.play(series, library.progress(for: series)?.episodeIndex)) {
+                            PillButtonLabel(title: playTitle, icon: "play.fill", tone: .ink, height: 48, expand: true)
+                        }
+                        .buttonStyle(PressScale(scale: 0.98))
+                        .disabled(d.episodes.isEmpty)
+                        .accessibilityIdentifier("detail.play")
+                        heart(48)
+                    }
+                    .padding(.top, 4)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(22)
+        }
+        .background(STVTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(STVTheme.hairline, lineWidth: 1))
+        .padding(.horizontal, 20)
+    }
+
+    @ViewBuilder private func detailBody(_ d: HGSeriesDetail, showActions: Bool = true) -> some View {
         stats(d).padding(.top, 18)
 
-        HStack(spacing: 12) {
-            NavigationLink(value: Route.play(series, library.progress(for: series)?.episodeIndex)) {
-                PillButtonLabel(title: playTitle, icon: "play.fill", tone: .ink, height: 50, expand: true)
+        if showActions {
+            HStack(spacing: 12) {
+                NavigationLink(value: Route.play(series, library.progress(for: series)?.episodeIndex)) {
+                    PillButtonLabel(title: playTitle, icon: "play.fill", tone: .ink, height: 50, expand: true)
+                }
+                .buttonStyle(PressScale(scale: 0.98))
+                .disabled(d.episodes.isEmpty)
+                .accessibilityIdentifier("detail.play")
+                heart(50)
             }
-            .buttonStyle(PressScale(scale: 0.98))
-            .disabled(d.episodes.isEmpty)
-            .accessibilityIdentifier("detail.play")
-            heart(50)
-        }
-        .padding(.horizontal, 20).padding(.top, 16)
-        .compatOnFrame(in: .named("detail")) { f in let out = f.maxY < 60
-            if actionsOut != out { withAnimation(DS.panel) { actionsOut = out } }
+            .padding(.horizontal, 20).padding(.top, 16)
+            .compatOnFrame(in: .named("detail")) { f in let out = f.maxY < 60
+                if actionsOut != out { withAnimation(DS.panel) { actionsOut = out } }
+            }
         }
 
         if !d.tags.isEmpty {
@@ -385,7 +461,7 @@ struct DramaDetailView: View {
 
     @ViewBuilder private func episodes(_ d: HGSeriesDetail) -> some View {
         let resume = library.progress(for: series)
-        let ranges = EpisodeGroups.ranges(total: d.episodes.count)
+        let ranges = EpisodeGroups.ranges(total: d.episodes.count, groupLimit: epGroupLimit)
         let g = ranges.indices.contains(group) ? group : 0
         let range = ranges.isEmpty ? EpisodeRange(0, -1) : ranges[g]
         DSSectionHeader(title: "选集", note: "共 \(max(d.totalEps, d.episodes.count)) 集", inset: 20)
@@ -564,7 +640,7 @@ struct DramaDetailView: View {
 
     private func selectResumeGroup() {
         guard let d = detail, let r = library.progress(for: series) else { return }
-        let ranges = EpisodeGroups.ranges(total: d.episodes.count)
+        let ranges = EpisodeGroups.ranges(total: d.episodes.count, groupLimit: epGroupLimit)
         if let i = ranges.firstIndex(where: { r.episodeIndex >= $0.start && r.episodeIndex <= $0.end }) {
             group = i
         }

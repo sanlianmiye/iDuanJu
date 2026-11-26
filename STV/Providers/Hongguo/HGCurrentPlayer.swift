@@ -13,12 +13,155 @@ enum HGCurrentPlayer {
     private static let factorIV = (0..<8).map { le(profile,3136 + $0 * 4) }
     private static let factorTable = (0..<64).map { le(profile,3168 + $0 * 4) }
     private static let padding = Array(profile[3424..<3428])
+    private static let defaultProcessNonce: String = Data(Bytes.random(18)).base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    private static let defaultProcessStarted: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
     private static func le(_ b:[UInt8],_ at:Int)->UInt32 { (0..<4).reduce(0) { $0 | UInt32(b[at+$1]) << ($1*8) } }
     private static func be(_ b:[UInt8],_ at:Int)->UInt32 { (0..<4).reduce(0) { ($0 << 8) | UInt32(b[at+$1]) } }
     private static func rr(_ x:UInt32,_ n:Int)->UInt32 { let n=n&31; return x >> n | x << ((32-n)&31) }
     private static func r64(_ x:UInt64,_ n:Int)->UInt64 { let n=n&63; return x >> n | x << ((64-n)&63) }
     private static func b64(_ b:[UInt8])->String { Data(b).base64EncodedString() }
     private static func bad()->ProviderError { .invalid("当前播放器签名参数无效") }
+
+    static func encodeV5Query(_ pairs: [(String, String)]) -> String {
+        pairs.map { encV5($0.0) + "=" + encV5($0.1) }.joined(separator: "&")
+    }
+
+    private static func encV5(_ str: String) -> String {
+        var out = ""
+        out.reserveCapacity(str.utf8.count + 8)
+        for c in str.utf8 {
+            let keep = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) ||
+                c == 45 || c == 95 || c == 46 || c == 126 || c == 42
+            if keep { out.append(Character(UnicodeScalar(c))) }
+            else { out += String(format: "%%%02X", c) }
+        }
+        return out
+    }
+
+    /// Medusa v5 mobile playback signer (7.4.5.32 preload/v1 & video_tab/v1, field 21 = 312).
+    static func signPlaybackV5(
+        pairs: [(String, String)],
+        nowMillis: Int64,
+        body: [UInt8],
+        includeBodyHeaders: Bool? = nil,
+        entropy: [UInt8]? = nil,
+        processNonce: String = defaultProcessNonce,
+        processStarted: Int64 = defaultProcessStarted,
+        field21: Int? = HGProtocol.shared.current.field21
+    ) throws -> (query: String, headers: [String: String]) {
+        let ent = entropy ?? Bytes.random(16)
+        guard nowMillis > 1000, ent.count >= 16 else { throw bad() }
+        let withBodyHeaders = includeBodyHeaders ?? !body.isEmpty
+        let base = pairs.filter { $0.0 != "_rticket" }
+        let ts = UInt32(truncatingIfNeeded: nowMillis / 1000)
+        let digest = HGPlayerSign.md5(body)
+        let tsBytes = HGPlayerSign.le32(ts)
+        for offset in Int64(0)..<1024 {
+            let ticket = nowMillis + offset
+            let next = base + [("_rticket", String(ticket))]
+            let query = encodeV5Query(next)
+            let qhash = HGPlayerSign.sm3(Array(query.utf8))
+            let low = Int(HGPlayerSign.getIV(HGPlayerSign.getIV(HGPlayerSign.getIV(0x20230928, qhash), digest), tsBytes) & 15)
+            if low != 12 { continue }
+            var values: [String: String] = [:]
+            for (k, v) in next { values[k] = v }
+            var headers: [String: String] = [
+                "x-khronos": String(ts),
+                "x-helios": helios(UInt64(ts), "646637794", "8662", le(ent, 4)),
+                "x-medusa": try medusaV5(qhash: qhash, digest: digest, ts: ts, values: values,
+                                         msgRand: le(ent, 0), nonce: le(ent, 8), packedRand: le(ent, 12),
+                                         pNonce: processNonce, pStarted: processStarted, field21: field21),
+            ]
+            if withBodyHeaders {
+                headers["Content-Type"] = "application/json; charset=utf-8"
+                headers["x-ss-stub"] = HGPlayerSign.hexStr(digest).uppercased()
+            }
+            return (query, headers)
+        }
+        throw ProviderError.upstream("v5 播放签名分支搜索失败")
+    }
+
+    static func hashF13V5(_ qhash: [UInt8], _ digest: [UInt8], _ ts: UInt32) throws -> [UInt8] {
+        let tsBytes = HGPlayerSign.le32(ts)
+        let low = Int(HGPlayerSign.getIV(HGPlayerSign.getIV(HGPlayerSign.getIV(0x20230928, qhash), digest), tsBytes) & 15)
+        guard low == 12 else { throw bad() }
+        let ivV1: UInt32 = 0x9d4a97c2
+        let count = ivV1 &+ ts
+        let tt = factorTable.map { rr($0, Int((count &+ 1) & 31)) }
+        let shift = UInt16((count &+ 2) & 7)
+        let pad = padding.map { v -> UInt8 in
+            let c = UInt16(v) | (UInt16(v) << 8)
+            return UInt8((c >> shift) & 255)
+        }
+        let data = qhash + digest + tsBytes + pad + [0, 0, 0, 0, 0, 0, 1, 0xa0]
+        let di = HGPlayerSign.expandWords(data)
+        let ini = factorIV.map { rr($0, Int(count & 31)) }
+        let chosen: [UInt32] = [96, 1, 3, 4, 0, 6, 5, 2, 0, 7, 7]
+        let d = HGPlayerSign.mixRounds(ini, chosen, di, tt, ivV1)
+        let ret = (0..<8).flatMap { HGPlayerSign.be32(d[$0] &+ ini[$0]) }
+        let folded = (0..<16).map { ret[$0] ^ ret[$0 + 16] }
+        let check = HGPlayerSign.sumMD5(folded) | 0x20
+        return folded + HGPlayerSign.le32(check)
+    }
+
+    private static func medusaV5(
+        qhash: [UInt8],
+        digest: [UInt8],
+        ts: UInt32,
+        values: [String: String],
+        msgRand: UInt32,
+        nonce: UInt32,
+        packedRand: UInt32,
+        pNonce: String,
+        pStarted: Int64,
+        field21: Int?
+    ) throws -> String {
+        let f13 = try hashF13V5(qhash, digest, ts)
+        let flags = [UInt8](repeating: 0, count: 8)
+        let version = values["version_name"] ?? ""
+        let did = values["device_id"] ?? ""
+        let osVer = values["os_version"] ?? ""
+        let devType = values["device_type"] ?? ""
+        let channel = values["channel"] ?? ""
+        func n(_ tag: UInt32, _ v: Int64) -> [UInt8] { HGPlayerSign.pSInt(tag, v) }
+        func s(_ tag: UInt32, _ v: String) -> [UInt8] { HGPlayerSign.pStr(tag, v) }
+        var deviceInfo = n(1, 1) + n(2, 2) + s(3, "8662") + s(4, did)
+        deviceInfo += s(5, pNonce) + s(6, "!noperm!") + s(12, "Asia/Shanghai,8") + s(13, "zh_CN")
+        deviceInfo += s(22, osVer) + n(25, pStarted) + s(30, devType) + s(31, "HONOR") + s(32, devType) + s(34, "HONOR")
+        let env = s(6, "v04.10.03.04-bugfix") + s(8, channel) + HGPlayerSign.pBytes(12, deviceInfo) + s(14, version)
+        var msg = HGPlayerSign.pBytes(1, header) + n(2, 5) + n(3, Int64(msgRand)) + s(4, "8662")
+        msg += s(5, did) + s(6, "646637794") + s(7, version) + s(8, "v04.10.03-ml-android")
+        msg += n(9, 0x040a0300) + HGPlayerSign.pBytes(10, flags) + n(12, Int64(ts)) + HGPlayerSign.pBytes(13, f13)
+        msg += HGPlayerSign.pBytes(14, Array(qhash.prefix(6)))
+        msg += HGPlayerSign.pBytes(15, n(1, 1) + n(2, 1) + n(3, 1) + n(5, 1))
+        msg += n(17, Int64(ts)) + s(20, "none") + (field21.map { n(21, Int64($0)) } ?? []) + HGPlayerSign.pBytes(23, env)
+        msg += s(24, #"{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}"#)
+        let (hash, seed) = HGPlayerSign.keyHash(material, nonce)
+        var tr = Array((flags + HGPlayerSign.xmxor(msg, hash)).reversed())
+        for i in 0..<tr.count { tr[i] ^= seed[(~i) & 3] }
+        let check: UInt32 = 0x18000001 | (UInt32(qhash[0] & 63) << 14) | (UInt32(f13[0] & 63) << 8)
+        var packed: [UInt8] = [0xca] + HGPlayerSign.le32(packedRand) + HGPlayerSign.le32(check) + tr
+        packed += [UInt8((nonce >> 16) & 255), UInt8((nonce >> 24) & 255)]
+        guard packed.count >= 248 else { throw bad() }
+        let lane = [6, 5, 3, 4, 2, 7, 1, 0]
+        let bits = [1, 7, 3, 6, 2, 0, 4, 5]
+        var plain = [UInt8](repeating: 0, count: 31)
+        for i in 0..<248 { plain[i / 8] |= ((packed[i] >> lane[i % 8]) & 1) << bits[i % 8] }
+        let channelBytes = try transform(plain, HGPlayerSign.md5(Array(material[0..<16])), HGPlayerSign.md5(Array(material[16..<32])), Int(ts & 3))
+        var bodyOut = packed
+        for i in 0..<248 {
+            let clearMask = ~UInt8(1 << lane[i % 8])
+            let bit = ((channelBytes[i / 8] >> bits[i % 8]) & 1) << lane[i % 8]
+            bodyOut[i] = (bodyOut[i] & clearMask) | bit
+        }
+        var hdr = HGPlayerSign.le32(5) + header
+        let mask = HGPlayerSign.le32(ts)
+        for i in hdr.indices { hdr[i] ^= mask[i & 3] }
+        return b64(hdr + [UInt8(nonce & 255), UInt8((nonce >> 8) & 255), 0, 1, channelBytes[31]] + bodyOut)
+    }
 
     static func sign(pairs:[(String,String)], nowMillis:Int64, deviceID:String, versionName:String, body:[UInt8], entropy:[UInt8]? = nil) throws -> (query:String,headers:[String:String]) {
         let ent=entropy ?? (0..<24).map { _ in UInt8.random(in:0...255) }

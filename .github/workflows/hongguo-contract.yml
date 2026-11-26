@@ -28,5 +28,5 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
-      - run: chmod +x gradlew && ./gradlew :core:test --tests '*HGCurrentPlayerTest' --tests '*HGCategoryTest' --tests '*HGPlaybackSignTest' --console=plain
+      - run: chmod +x gradlew && ./gradlew :core:test --tests '*HGCurrentPlayerTest' --tests '*HGProtocolConfigTest' --tests '*HGCategoryTest' --tests '*HGPlaybackSignTest' --console=plain
         working-directory: android

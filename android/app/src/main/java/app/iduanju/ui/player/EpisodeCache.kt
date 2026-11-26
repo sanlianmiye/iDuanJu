@@ -7,6 +7,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineStart
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -26,6 +27,7 @@ object EpisodeCache {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inflight = ConcurrentHashMap<String, Deferred<Playable>>()
     private val ready = ConcurrentHashMap<String, Playable>()
+    private val firstFrames = android.util.LruCache<String, android.graphics.Bitmap>(6)
     private val httpDirect = OkHttpClient.Builder().proxy(Proxy.NO_PROXY)
         .connectTimeout(20, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build()
     private val httpSystem = httpDirect.newBuilder().proxy(null).build()
@@ -43,6 +45,24 @@ object EpisodeCache {
         return hit
     }
 
+    /** Synchronous lookup for a previously decoded first video frame (for instant swipe-back / fallback preview). */
+    fun peekFirstFrame(vid: String): android.graphics.Bitmap? = synchronized(firstFrames) { firstFrames.get(vid) }
+
+    /** Extract and cache frame 0 from a local video file off the main thread. */
+    fun cacheFirstFrame(vid: String, localPath: String) {
+        if (localPath.isEmpty() || !localPath.startsWith("/")) return
+        synchronized(firstFrames) { if (firstFrames.get(vid) != null) return }
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            r.setDataSource(localPath)
+            val bmp = r.getFrameAtTime(0L, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            if (bmp != null) synchronized(firstFrames) { firstFrames.put(vid, bmp) }
+        } catch (_: Throwable) {
+        } finally {
+            runCatching { r.release() }
+        }
+    }
+
     fun get(vid: String, onStatus: (String) -> Unit = {}): Deferred<Playable> = get(app.iduanju.core.hongguo.HGEpisode(0, vid), onStatus)
 
     fun get(ep: app.iduanju.core.hongguo.HGEpisode, onStatus: (String) -> Unit = {}): Deferred<Playable> = synchronized(inflight) {
@@ -51,7 +71,13 @@ object EpisodeCache {
         }
         inflight[ep.vid]?.takeIf { it.isActive } ?: run {
             val task = scope.async(start = CoroutineStart.LAZY) {
-                load(ep, onStatus).also { p -> ready[ep.vid] = p }
+                load(ep, onStatus).also { p ->
+                    ready[ep.vid] = p
+                    // Extract frame 0 asynchronously so it NEVER delays or blocks playback start.
+                    if (p.uri.startsWith("/") && !p.hls) {
+                        scope.launch { cacheFirstFrame(ep.vid, p.uri) }
+                    }
+                }
             }
             inflight[ep.vid] = task
             task.invokeOnCompletion { inflight.remove(ep.vid, task) }

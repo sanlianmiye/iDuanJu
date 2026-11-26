@@ -10,11 +10,22 @@ final class HLSPlayback: NSObject, AVAssetResourceLoaderDelegate {
     let headers: [String: String]
     let keyHex: String
     private let queue = DispatchQueue(label: "stv.hls.loader")
-    private let session = URLSession(configuration: .default)
+    private static let session: URLSession = {
+        let c = URLSessionConfiguration.default
+        c.timeoutIntervalForRequest = 20
+        return URLSession(configuration: c)
+    }()
+    /// In-flight network tasks keyed by loading request (accessed exclusively on `queue`).
+    private var inFlight: [ObjectIdentifier: URLSessionDataTask] = [:]
 
     init(headers: [String: String], keyHex: String) {
         self.headers = headers
         self.keyHex = keyHex
+    }
+
+    deinit {
+        let tasks = Array(inFlight.values)
+        tasks.forEach { $0.cancel() }
     }
 
     func makeAsset(url: String) -> AVURLAsset? {
@@ -27,7 +38,13 @@ final class HLSPlayback: NSObject, AVAssetResourceLoaderDelegate {
         return asset
     }
 
+    func resourceLoader(_ loader: AVAssetResourceLoader, didCancel req: AVAssetResourceLoadingRequest) {
+        let id = ObjectIdentifier(req)
+        inFlight.removeValue(forKey: id)?.cancel()
+    }
+
     func resourceLoader(_ loader: AVAssetResourceLoader, shouldWaitForLoadingOfRequestedResource req: AVAssetResourceLoadingRequest) -> Bool {
+        guard !req.isCancelled, !req.isFinished else { return false }
         guard let url = req.request.url, let scheme = url.scheme else { return false }
         if scheme == Self.keyScheme {
             guard let key = Bytes.fromHex(keyHex), key.count == 16 else { req.finishLoading(with: URLError(.userAuthenticationRequired)); return true }
@@ -43,16 +60,26 @@ final class HLSPlayback: NSObject, AVAssetResourceLoaderDelegate {
         guard let real = c.url else { return false }
         var r = URLRequest(url: real)
         for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
-        session.dataTask(with: r) { [weak self] data, resp, err in
-            guard let self, let data, err == nil, (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? false else {
-                req.finishLoading(with: err ?? URLError(.badServerResponse)); return
+        let id = ObjectIdentifier(req)
+        let task = Self.session.dataTask(with: r) { [weak self] data, resp, err in
+            guard let self else { return }
+            self.queue.async {
+                self.inFlight.removeValue(forKey: id)
+                guard !req.isCancelled, !req.isFinished else { return }
+                guard let data, err == nil, (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? false else {
+                    req.finishLoading(with: err ?? URLError(.badServerResponse))
+                    return
+                }
+                let text = self.rewrite(HLSAdFilter.apply(String(decoding: data, as: UTF8.self), base: real), base: real)
+                let body = Data(text.utf8)
+                req.contentInformationRequest?.contentType = "public.m3u-playlist"
+                req.contentInformationRequest?.contentLength = Int64(body.count)
+                req.dataRequest?.respond(with: body)
+                req.finishLoading()
             }
-            let text = self.rewrite(HLSAdFilter.apply(String(decoding: data, as: UTF8.self), base: real), base: real)
-            req.contentInformationRequest?.contentType = "public.m3u-playlist"
-            req.contentInformationRequest?.contentLength = Int64(text.utf8.count)
-            req.dataRequest?.respond(with: Data(text.utf8))
-            req.finishLoading()
-        }.resume()
+        }
+        inFlight[id] = task
+        task.resume()
         return true
     }
 

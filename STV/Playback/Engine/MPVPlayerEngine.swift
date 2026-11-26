@@ -145,11 +145,49 @@ final class MPVMetalView: UIView {
         shuttingDown = true
         refitTask?.cancel()
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        // Drain any pending videoQueue property calls before destroying mpv_handle* to avoid use-after-free.
         videoQueue.sync {}
         if let handle = mpv {
+            mpv = nil
+            // Keep MPVMetalView / CAMetalLayer (`wid` unretained pointer) alive until `mpv_terminate_destroy`
+            // finishes tearing down MoltenVK's VkSurfaceKHR, then release UIView on the main thread.
+            let keepSurfaceAlive = hostView
             mpv_wakeup(handle)
+            eventQueue.async {
+                mpv_terminate_destroy(handle)
+                DispatchQueue.main.async { _ = keepSurfaceAlive }
+            }
+        }
+    }
+
+    func shutdown() {
+        guard !shuttingDown else { return }
+        shuttingDown = true
+        generation += 1
+        hostView.onResize = nil
+        refitTask?.cancel()
+        refitTask = nil
+        suspendedForBackground = false
+        resumeAfterBackground = false
+        mounted = false
+        if let cont = loadContinuation {
+            loadContinuation = nil
+            cont.resume(throwing: CancellationError())
+        }
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lifecycleObservers.removeAll()
+        guard let handle = mpv else { return }
+        mpv = nil
+        let keepSurfaceAlive = hostView
+        videoQueue.sync {}
+        var pauseFlag: Int32 = 1
+        _ = mpv_set_property(handle, "pause", MPV_FORMAT_FLAG, &pauseFlag)
+        _ = mpv_set_property_string(handle, "vid", "no")
+        _ = mpv_set_property_string(handle, "vo", "null")
+        Self.runCommand(handle, ["stop"])
+        mpv_wakeup(handle)
+        eventQueue.async {
             mpv_terminate_destroy(handle)
+            DispatchQueue.main.async { _ = keepSurfaceAlive }
         }
     }
 
@@ -237,6 +275,7 @@ final class MPVMetalView: UIView {
         setOpt("demuxer-max-bytes", "64MiB")
         setOpt("demuxer-max-back-bytes", "16MiB")
         setOpt("network-timeout", "20")
+        setOpt("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=3")
         #if DEBUG
         setOpt("terminal", "no")
         #endif
@@ -406,9 +445,7 @@ final class MPVMetalView: UIView {
         if let ua = merged["User-Agent"] {
             _ = mpv_set_property_string(handle, "user-agent", ua)
         }
-        if let ref = merged["Referer"] {
-            _ = mpv_set_property_string(handle, "referrer", ref)
-        }
+        _ = mpv_set_property_string(handle, "referrer", merged["Referer"] ?? "")
         let extra = merged.filter { $0.key != "User-Agent" && $0.key != "Referer" }
             .map { "\($0.key): \($0.value)" }
             .joined(separator: ",")
@@ -567,6 +604,17 @@ final class MPVMetalView: UIView {
         guard let handle = mpv else { return }
         var amount: Double = level >= 2 ? 1.0 : (level == 1 ? 0.55 : 0.0)
         _ = mpv_set_property(handle, "sharpen", MPV_FORMAT_DOUBLE, &amount)
+    }
+
+    func setSdrToHdr(_ enabled: Bool) {
+        guard let handle = mpv else { return }
+        _ = mpv_set_property_string(handle, "inverse-tone-mapping", enabled ? "yes" : "no")
+        var contrast: Int64 = enabled ? 5 : 0
+        var saturation: Int64 = enabled ? 7 : 0
+        var gamma: Int64 = enabled ? 3 : 0
+        _ = mpv_set_property(handle, "contrast", MPV_FORMAT_INT64, &contrast)
+        _ = mpv_set_property(handle, "saturation", MPV_FORMAT_INT64, &saturation)
+        _ = mpv_set_property(handle, "gamma", MPV_FORMAT_INT64, &gamma)
     }
 
     // MARK: Tracks

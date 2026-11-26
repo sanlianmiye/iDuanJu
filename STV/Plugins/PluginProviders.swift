@@ -315,7 +315,7 @@ struct JSVideoProvider: SiteProvider {
     }
 
     func list(_ c: SiteCategory, page p: Int) async throws -> HGPage {
-        if c.id == Self.homeID {
+        if c.id == Self.homeID || c.id.isEmpty {
             if p > 1 { return HGPage(items: [], hasMore: false) }
             let r = try await PluginRuntime.call(pluginID, "home", [:])
             let cats = PluginOut.categories((r as? [String: Any])?["categories"])

@@ -7,12 +7,13 @@ and modified for this app. Full license text: `STV/Resources/Licenses/` (shown i
 
 ## yt-dlp — The Unlicense (public domain)
 https://github.com/yt-dlp/yt-dlp — page structures / endpoints for Eporner (xhr hash), XVideos / XNXX (html5player),
-Pornhub (mediaDefinitions) were cross-checked against its extractors. The Swift code is an independent implementation.
+Pornhub / YouPorn / RedTube (mediaDefinitions) were cross-checked against its extractors. The Swift code is an independent implementation.
 
 ## Interface references without code reuse
 - Huangguo AI site (huangguoai.com and mirrors): the 2026-11-09 `POST /api/videos/<id>/episodes/<ep>/playback`
   flow was derived by reading the site's own public front-end scripts (services/playback.js); no third-party code copied.
 - Hanime1 compact-grid markup change (`search-videos hover-lighter`) was observed on the live site.
+- HQPorner list cards and the mydaddy.cc embed `<source title="720p">` tags (2026-11) were read from those sites' public HTML. No third-party code copied.
 
 ## TDLibKit (MIT) / TDLibFramework / TDLib (Boost Software License 1.0)
 - https://github.com/Swiftgram/TDLibKit 1.5.2-tdlib-1.8.69-6126ecae (SPM dependency, MIT)

@@ -14,8 +14,9 @@ import java.nio.file.Files
  */
 class HGPureRepeatLiveTest {
     @Test fun consecutiveEpisodesResolve() {
- assumeTrue(System.getProperty("idj.live") == "1")
- val hg = HongguoClient(Files.createTempDirectory("hg").toFile())
+        assumeTrue(System.getProperty("idj.live") == "1")
+        LiveTestNet.configureIfRequested()
+        val hg = HongguoClient(Files.createTempDirectory("hg").toFile())
         val sid = hg.rank(HGRankSub.hot, HGRankGenre.all).items.first().seriesId
         val eps = hg.detail(sid).episodes.take(6)
         val seq = eps.joinToString("") { e ->

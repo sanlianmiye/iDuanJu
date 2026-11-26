@@ -766,7 +766,8 @@ actor HuangguoClient {
             if method == "GET" { full += (full.contains("?") ? "&" : "?") + "data=" + GoURL.queryEscape(enc) }
             else { body = J.encodeSorted(["data": enc]) }
         }
-        var r = URLRequest(url: URL(string: base + full)!)
+        guard let reqURL = URL(string: base + full) else { throw ProviderError.invalid("bad url") }
+        var r = URLRequest(url: reqURL)
         r.httpMethod = method
         r.httpBody = body
         if !a.token.isEmpty { r.setValue(a.token, forHTTPHeaderField: "Authorization") }

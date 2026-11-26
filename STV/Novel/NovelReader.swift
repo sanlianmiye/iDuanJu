@@ -281,12 +281,13 @@ struct NovelReaderView: View {
     // MARK: Layout
 
     private func layoutKey(_ geo: GeometryProxy) -> String {
-        "\(prefs.fontSize)-\(prefs.lineSpacing)-\(prefs.margin)-\(prefs.fontID)-\(prefs.indent)-\(prefs.theme.rawValue)-\(fonts.revision)-\(Int(geo.size.width))x\(Int(geo.size.height))"
+        "\(prefs.fontSize)-\(prefs.lineSpacing)-\(prefs.margin)-\(prefs.fontID)-\(prefs.indent)-\(prefs.theme.rawValue)-\(fonts.revision)-\(Int(geo.size.width))x\(Int(geo.size.height))-\(Int(geo.safeAreaInsets.top))-\(Int(geo.safeAreaInsets.bottom))-\(Int(layout.readerMaxWidth ?? 0))"
     }
 
     private func pageStyle(_ geo: GeometryProxy) -> NovelPageStyle {
         let p = pal
-        return NovelPageStyle(size: CGSize(width: geo.size.width - 2 * hMargin, height: geo.size.height - 62),
+        let pageW = (layout.readerMaxWidth.map { min(geo.size.width, $0) } ?? geo.size.width) - 2 * hMargin
+        return NovelPageStyle(size: CGSize(width: max(1, pageW), height: max(1, geo.size.height - 62)),
             fontSize: prefs.fontSize, lineSpacing: prefs.lineSpacing, indent: prefs.indent, fontID: prefs.fontID,
             text: p.text, secondary: UIColor(p.secondary), background: UIColor(p.bg),
             highlight: UIColor(NovelLayout.accent).withAlphaComponent(0.22))

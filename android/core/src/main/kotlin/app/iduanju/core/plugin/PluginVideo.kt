@@ -32,14 +32,18 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
     private val media get() = DomainPolicy(m.mediaDomains + m.httpDomains + extraDomains)
     var categories: List<CMSCategory> = emptyList(); private set
 
-    private fun cover(u: String): String { val h = runCatching { java.net.URI(u).host }.getOrNull() ?: return ""; return if (media.allows(h) && !NetGuard.isIPLiteral(h)) u else "" }
+    private fun cover(u: String, headers: Map<String, String> = emptyMap()): String {
+        val h = runCatching { java.net.URI(u).host }.getOrNull() ?: return ""
+        if (!media.allows(h) || NetGuard.isIPLiteral(h)) return ""
+        return if (headers.isNotEmpty()) PluginMedia.ref(pid, u, headers) else u
+    }
 
     private fun series(o: JSONObject): HGSeries? {
         val id = PluginOut.s(o.opt("id")); val title = PluginOut.s(o.opt("title"), 200)
         if (id.isEmpty() || title.isEmpty()) return null
         val tags = PluginOut.strings(o.opt("tags")) + PluginOut.strings(o.opt("badges"))
         if (ContentFilter.isBlocked(listOf(title) + tags)) return null
-        return HGSeries(seriesId = sid(pid, id), title = title, cover = cover(PluginOut.url(o.opt("cover"))), subtitle = PluginOut.s(o.opt("remarks"), 40).ifEmpty { null },
+        return HGSeries(seriesId = sid(pid, id), title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders"))), subtitle = PluginOut.s(o.opt("remarks"), 40).ifEmpty { null },
             author = PluginOut.strings(o.opt("actors")).joinToString(" ").ifEmpty { null }, orientation = if (o.optString("orientation") == "portrait") "portrait" else null, tags = tags)
     }
 
@@ -76,7 +80,7 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
             val eid = PluginOut.s(e.opt("id"), 2000); if (eid.isEmpty()) null
             else HGEpisode(i + 1, epVid(pid, id, eid), e.optInt("duration"), PluginOut.s(e.opt("name"), 80).ifEmpty { "第${i + 1}集" }, page = lineName)
         }.mapIndexed { i, e -> e.copy(ep = i + 1) }
-        return HGSeriesDetail(seriesId = seriesSid, title = title, cover = cover(PluginOut.url(o.opt("cover"))), desc = org.jsoup.parser.Parser.unescapeEntities(PluginOut.s(o.opt("desc"), 4000), false).replace(Regex("[\\s\\u00a0]+"), " ").trim(),
+        return HGSeriesDetail(seriesId = seriesSid, title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders"))), desc = org.jsoup.parser.Parser.unescapeEntities(PluginOut.s(o.opt("desc"), 4000), false).replace(Regex("[\\s\\u00a0]+"), " ").trim(),
             author = PluginOut.s(o.opt("director"), 80), actors = PluginOut.strings(o.opt("actors")), totalEps = eps.size, episodes = eps, tags = tags,
             episodeLabel = if (eps.size > 1) "共${eps.size}集" else "长视频", source = m.name)
     }

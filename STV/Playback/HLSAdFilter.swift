@@ -102,12 +102,12 @@ enum HLSAdFilter {
                 let bDir = major(blk, dir)?.0 ?? ""
                 // 2. foreign host / directory.
                 let foreign = bHost != mainHost || (dirReliable && bDir != mainDir?.0)
-                if foreign, (5...30).contains(dur), blk.count <= 10 {
+                if foreign, dur.isFinite, (5...30).contains(dur), blk.count <= 10 {
                     drop.formUnion(blk); reasons.append("foreign \(bHost)\(bDir) \(Int(dur))s")
                     continue
                 }
                 // 3. clear block inside AES content.
-                if mainEncrypted, blk.allSatisfy({ !segs[$0].encrypted }), (8...30).contains(dur) {
+                if mainEncrypted, blk.allSatisfy({ !segs[$0].encrypted }), dur.isFinite, (8...30).contains(dur) {
                     drop.formUnion(blk); reasons.append("clear-in-AES \(Int(dur))s")
                 }
             }
@@ -121,9 +121,9 @@ enum HLSAdFilter {
             if rd < total * 0.25 { drop.formUnion(repeated); reasons.append("repeated×\(repeated.count)") }
         }
 
-        let removedSeconds = drop.reduce(0) { $0 + segs[$1].duration }
-        guard !drop.isEmpty, removedSeconds <= total * 0.4, drop.count < segs.count else {
-            return Result(text: text, removed: 0, removedSeconds: 0, reasons: drop.isEmpty ? [] : ["skipped: too much (\(Int(removedSeconds))s)"])
+        let removedSeconds = drop.reduce(0) { $0 + ($1 < segs.count && segs[$1].duration.isFinite ? segs[$1].duration : 0) }
+        guard !drop.isEmpty, removedSeconds.isFinite, removedSeconds <= total * 0.4, drop.count < segs.count else {
+            return Result(text: text, removed: 0, removedSeconds: 0, reasons: drop.isEmpty ? [] : ["skipped: too much (\(removedSeconds.isFinite ? Int(removedSeconds) : 0)s)"])
         }
 
         // Emit: keep state lines (KEY / MAP) correct for every kept segment; one DISCONTINUITY per seam.

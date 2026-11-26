@@ -1,0 +1,53 @@
+{
+ "manifest": {
+  "schema": 1,
+  "id": "com.idj.bundled.hqporner",
+  "name": "HQPorner",
+  "version": "1.0.0",
+  "author": {
+   "name": "i短剧"
+  },
+  "description": "HQPorner · MP4 多画质（mydaddy.cc 嵌入页，需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+   "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+   "http": [
+    "hqporner.com",
+    "*.hqporner.com",
+    "mydaddy.cc",
+    "*.mydaddy.cc"
+   ],
+   "media": [
+    "hqporner.com",
+    "*.hqporner.com",
+    "mydaddy.cc",
+    "*.mydaddy.cc",
+    "*.bigcdn.cc"
+   ],
+   "cloudflare": false,
+   "storage": false,
+   "login": false
+  },
+  "capabilities": [
+   "home",
+   "category",
+   "search",
+   "detail",
+   "play"
+  ],
+  "settings": [],
+  "integrity": {
+   "files": {
+    "main.js": "sha256-a8GDkDU/5b3STmGgVlH/fver2Rd4fvaLehs8jTUex9U="
+   }
+  }
+ },
+ "files": {
+  "main.js": "const BLOCKED = [\n  'underage','under age','minor ','minors','preteen','pre-teen','child','kid ','kids','loli','shota',\n  'schoolgirl','school girl','jailbait','rape','raped','forced','non-consensual','nonconsensual','non consent',\n  'drugged','unconscious','sleeping','passed out','hidden cam','hidden camera','spy cam','upskirt',\n  '未成年','幼女','萝莉','蘿莉','中学生','中學生','小学生','小學生','强奸','強姦','强暴','迷奸','迷姦','偷拍','下药','下藥'\n];\nfunction safeTitle(t) {\n  const s = ' ' + String(t || '').toLowerCase() + ' ';\n  for (let i = 0; i < BLOCKED.length; i++) if (s.indexOf(BLOCKED[i]) >= 0) return false;\n  return true;\n}\nfunction unescapeHtml(s) {\n  return String(s || '')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#0?39;/g, \"'\").replace(/&#x27;/gi, \"'\")\n    .replace(/&nbsp;/g, ' ').replace(/\\\\\\//g, '/');\n}\nfunction cleanText(s) {\n  return unescapeHtml(String(s || '').replace(/<[^>]*>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\nfunction absUrl(base, u) {\n  u = unescapeHtml(u).trim();\n  if (!u || /^(?:data|javascript|about):/i.test(u)) return '';\n  if (u.startsWith('//')) return 'https:' + u;\n  if (/^http:\\/\\//i.test(u)) return 'https://' + u.slice(7);\n  if (/^https:\\/\\//i.test(u)) return u;\n  return host.url.resolve(base.endsWith('/') ? base : base + '/', u);\n}\nfunction pageNum(p) { const n = Number(p); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1; }\nfunction balancedArray(marker, h) {\n  const idx = h.indexOf(marker);\n  if (idx < 0) return null;\n  const open = h.indexOf('[', idx + marker.length);\n  if (open < 0) return null;\n  let depth = 0, inStr = false, esc = false;\n  for (let i = open; i < h.length; i++) {\n    const c = h[i];\n    if (inStr) {\n      if (esc) esc = false;\n      else if (c === '\\\\') esc = true;\n      else if (c === '\"') inStr = false;\n    } else if (c === '\"') inStr = true;\n    else if (c === '[') depth++;\n    else if (c === ']') { depth--; if (depth === 0) return h.slice(open, i + 1); }\n  }\n  return null;\n}\nfunction fmtPage(tpl, page) {\n  const parts = tpl.split('|');\n  const s = page <= 1 ? parts[0] : (parts.length > 1 ? parts[1] : parts[0]);\n  return s.replace(/\\{p0\\}/g, String(Math.max(0, page - 1))).replace(/\\{p\\}/g, String(Math.max(1, page)));\n}\nfunction lastMonth() {\n  const d = new Date();\n  d.setUTCMonth(d.getUTCMonth() - 1);\n  const m = String(d.getUTCMonth() + 1).padStart(2, '0');\n  return d.getUTCFullYear() + '-' + m;\n}\nconst SITE = 'https://hqporner.com';\nconst UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15';\nconst CATS = [\n  { id: 'new', name: '最新', path: '/|/hdporn/{p}' },\n  { id: 'top', name: '热门总榜', path: '/top|/top/{p}', isRank: true },\n  { id: 'week', name: '本周热门', path: '/top/week|/top/week/{p}', isRank: true },\n  { id: 'month', name: '本月热门', path: '/top/month|/top/month/{p}', isRank: true },\n];\nasync function get(path, referer) {\n  const url = /^https?:\\/\\//i.test(path) ? path : SITE + path;\n  const res = await host.http.request({ url, headers: { 'User-Agent': UA, 'Referer': referer || (SITE + '/') }, timeout: 15000 });\n  if (res.status < 200 || res.status >= 300) throw host.error('E_HTTP', 'HTTP ' + res.status);\n  return { body: res.body, url: res.url || url };\n}\nfunction parseList(h, page) {\n  const items = [], seen = {};\n  for (const chunk of h.split('<section class=\"box feature\">').slice(1)) {\n    const card = chunk.slice(0, 8000);\n    const lm = card.match(/href=\"(\\/hdporn\\/(\\d+)-([^\"]+)\\.html)\"/i);\n    if (!lm || seen[lm[2]]) continue;\n    let title = '';\n    const tre = />([^<]{3,})</g;\n    let m;\n    while ((m = tre.exec(card)) !== null) {\n      const t = cleanText(m[1]);\n      if (t && !/^\\d+\\s*m(?:\\s+\\d+\\s*s)?$/i.test(t)) { title = t; break; }\n    }\n    if (!title) title = lm[3].replace(/---/g, ' ').replace(/[_-]+/g, ' ');\n    if (!safeTitle(title)) continue;\n    seen[lm[2]] = 1;\n    const dm = card.match(/(\\d+\\s*m(?:\\s+\\d+\\s*s)?)/i);\n    const cm = card.match(/defaultImage\\([\"']([^\"']+)[\"']/i);\n    items.push({ id: lm[1], title, cover: cm ? absUrl(SITE, cm[1]) : '', remarks: dm ? dm[1] : '' });\n  }\n  const next = page + 1;\n  const more = h.indexOf('/' + next + '\"') >= 0 || h.indexOf('p=' + next) >= 0 || h.indexOf('page=' + next) >= 0;\n  return { items, page, hasMore: items.length > 0 && more };\n}\nexport default {\n  async home() {\n    const r = await get(fmtPage(CATS[0].path, 1));\n    const p = parseList(r.body, 1);\n    return { categories: CATS.map(c => ({ id: c.id, name: c.name, isRank: !!c.isRank })), items: p.items, hasMore: p.hasMore };\n  },\n  async category({ id, page }) {\n    const p = pageNum(page);\n    const cat = CATS.find(c => c.id === id) || CATS[0];\n    const r = await get(fmtPage(cat.path, p));\n    return parseList(r.body, p);\n  },\n  async search({ keyword, page }) {\n    const p = pageNum(page), q = encodeURIComponent(String(keyword || '').trim());\n    const r = await get(fmtPage('/?q=' + q + '|/?q=' + q + '&p={p}', p));\n    return parseList(r.body, p);\n  },\n  async detail({ id }) {\n    const r = await get(id);\n    const tm = r.body.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);\n    const cm = r.body.match(/defaultImage\\([\"']([^\"']+)[\"']/i);\n    const title = tm ? cleanText(tm[1]) : id;\n    return { title, cover: cm ? absUrl(SITE, cm[1]) : '', lines: [{ name: 'HQPorner', episodes: [{ id: r.url, name: title }] }] };\n  },\n  async play({ episodeId, id }) {\n    const r = await get(episodeId || id);\n    const em = r.body.match(/\\/\\/mydaddy\\.cc\\/video\\/([0-9a-z]+)\\//i);\n    if (!em) throw host.error('E_PARSE', 'HQPorner 页面里没有嵌入播放页');\n    const er = await get('https://mydaddy.cc/video/' + em[1] + '/', SITE + '/');\n    const flat = er.body.replace(/\\\\\"/g, '\"');\n    const hdr = { 'Referer': 'https://mydaddy.cc/', 'User-Agent': UA };\n    const out = [], seen = {};\n    const re = /<source\\b([^>]*)>/gi;\n    let m;\n    while ((m = re.exec(flat)) !== null) {\n      const tag = m[1];\n      const sm = tag.match(/\\bsrc=[\"']([^\"']+)[\"']/i);\n      if (!sm) continue;\n      const src = absUrl('https://mydaddy.cc/', sm[1]);\n      if (!src.startsWith('https://') || src.indexOf('.mp4') < 0 || seen[src]) continue;\n      seen[src] = 1;\n      const tm = tag.match(/\\btitle=[\"']([^\"']*)[\"']/i);\n      const hm = (tm ? tm[1] : '').match(/(\\d{3,4})/);\n      const h = hm ? parseInt(hm[1], 10) : 0;\n      out.push({ h, s: { name: (h > 0 ? h + 'p · ' : '') + 'MP4', url: src, format: 'mp4', headers: hdr } });\n    }\n    out.sort((a, b) => b.h - a.h);\n    if (!out.length) throw host.error('E_PARSE', 'HQPorner 嵌入页里没有 MP4');\n    return { streams: out.map(x => x.s) };\n  }\n};\n"
+ }
+}

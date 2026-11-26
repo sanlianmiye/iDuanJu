@@ -16,6 +16,7 @@ import java.net.URI
 class CENCLiveTest {
     @Before fun setUp() {
         assumeTrue(System.getProperty("idj.live") == "1")
+        LiveTestNet.configureIfRequested()
         System.getProperty("idj.hgDevice")?.takeIf { it.contains(",") }?.let { s ->
             val p = s.split(",", limit = 2)
             HGPlayerDevice.overrideProvider = { p[0].trim() to p[1].trim() }
@@ -30,11 +31,10 @@ class CENCLiveTest {
         println("[cenc] route=${client.lastPureRoute}")
         val s = r.streams.first()
         assertTrue(s.key.isNotEmpty())
-        val conn = URI(s.url).toURL().openConnection() as HttpURLConnection
-        conn.connectTimeout = 20000; conn.readTimeout = 60000
-        conn.setRequestProperty("User-Agent", "com.phoenix.read/73932")
-        // download first 4MB (enough for moov + some samples) then full if small
-        val bytes = conn.inputStream.use { it.readBytes() }
+        val http = LiveTestNet.configureIfRequested() ?: okhttp3.OkHttpClient()
+        val bytes = http.newCall(
+            okhttp3.Request.Builder().url(s.url).header("User-Agent", "com.phoenix.read/73932").build()
+        ).execute().use { it.body!!.bytes() }
         println("[cenc] downloaded ${bytes.size} encrypted=${s.key.isNotEmpty()} head=${bytes.take(8).joinToString(""){ "%02x".format(it) }}")
         // ftyp check
         assertTrue(String(bytes, 4, 4) == "ftyp" || String(bytes, 4, 4) == "moof")

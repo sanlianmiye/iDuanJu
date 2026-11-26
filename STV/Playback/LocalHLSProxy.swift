@@ -26,6 +26,8 @@ final class LocalHLSProxy: @unchecked Sendable {
         /// 红果 CENC MP4: content key, and the per-range decryptor once the header is read (`prepareCENC`).
         var cencKey: String?
         var cenc: CENCDecryptor.RangePlan?
+        /// Pre-resolved HLS AES-128 key (16 bytes), served at `/<token>/k.key` when present.
+        var hlsKey: Data? = nil
         /// MP4 chunk size (CENC uses small chunks so the header and first frames arrive fast on slow links).
         var chunk = BufferSettings.mp4Chunk
     }
@@ -70,8 +72,13 @@ final class LocalHLSProxy: @unchecked Sendable {
     }
 
     /// Proxy URL for an upstream m3u8 (nil if the listener can't start).
-    func playlistURL(_ upstream: String, headers: [String: String], strip: Bool = true, budget: Int = 0) -> String? {
-        register(upstream, headers: headers, strip: strip, budget: budget, kind: "p.m3u8")
+    /// When `hlsKey` (16-byte AES-128 key) is supplied, `#EXT-X-KEY` URIs are rewritten to `/<token>/k.key`.
+    func playlistURL(_ upstream: String, headers: [String: String], strip: Bool = true, budget: Int = 0, hlsKey: Data? = nil) -> String? {
+        guard let u = register(upstream, headers: headers, strip: strip, budget: budget, kind: "p.m3u8") else { return nil }
+        if let hlsKey, hlsKey.count == 16, let token = Self.token(of: u) {
+            lock.lock(); routes[token]?.hlsKey = hlsKey; lock.unlock()
+        }
+        return u
     }
 
     /// Proxy URL for a progressive MP4 (Range requests served chunk-wise from the prefetch cache).
@@ -277,6 +284,10 @@ final class LocalHLSProxy: @unchecked Sendable {
             guard let td = route("tg-\(Self.tdFileId(segs[1]))")?.td else { return reply(c, 404, "text/plain", Data()) }
             return await serveTD(c, td, range: rangeHeader, head: parts[0] == "HEAD")
         }
+        if segs.count == 2, segs[1] == "k.key" {
+            guard let key = route(segs[0])?.hlsKey else { return reply(c, 404, "text/plain", Data()) }
+            return reply(c, 200, "application/octet-stream", key)
+        }
         guard segs.count == 2, comps.count == 2, comps[1].hasPrefix("u="),
               let upstream = Self.unb64(String(comps[1].dropFirst(2))), let url = URL(string: upstream),
               url.scheme == "https" || url.scheme == "http" else { return reply(c, 404, "text/plain", Data()) }
@@ -302,7 +313,7 @@ final class LocalHLSProxy: @unchecked Sendable {
                 if let pf = rt.prefetcher, let units = HLSMedia.parse(original, base: final), units.allSatisfy({ $0.range == nil }) {
                     pf.setUnits(units)   // the variant AVPlayer actually chose
                 }
-                let text = try rewrite(original, base: final, token: segs[0],guarded:rt.guardedNet != nil)
+                let text = try rewrite(original, base: final, token: segs[0], guarded: rt.guardedNet != nil, hasStaticKey: rt.hlsKey != nil)
                 reply(c, 200, "application/vnd.apple.mpegurl", Data(text.utf8))
             case "s.ts":
                 reply(c, 200, "video/mp2t", rt.strip ? Self.stripFakeHeader(d) : d)
@@ -488,7 +499,7 @@ final class LocalHLSProxy: @unchecked Sendable {
 
     // MARK: Playlist rewrite
 
-    private func rewrite(_ pl: String, base: URL, token: String,guarded:Bool=false) throws -> String {
+    private func rewrite(_ pl: String, base: URL, token: String, guarded: Bool = false, hasStaticKey: Bool = false) throws -> String {
         func local(_ raw: String, _ kind: String) -> String {
             guard let u = URL(string: raw, relativeTo: base)?.absoluteURL else { return raw }
             return "http://127.0.0.1:\(port)/\(token)/\(kind)?u=\(Self.b64(u.absoluteString))"
@@ -507,6 +518,9 @@ final class LocalHLSProxy: @unchecked Sendable {
             if up.hasPrefix("#EXT-X-STREAM-INF") { expectPlaylist = true; return line }
             if up.hasPrefix("#EXT-X-KEY") || up.hasPrefix("#EXT-X-MAP") || up.hasPrefix("#EXT-X-MEDIA") || up.hasPrefix("#EXT-X-I-FRAME-STREAM-INF") {
                 guard let m = HTML.groups("URI\\s*=\\s*\"([^\"]+)\"", line) else { return line }
+                if up.hasPrefix("#EXT-X-KEY"), hasStaticKey {
+                    return line.replacingOccurrences(of: m[1], with: "http://127.0.0.1:\(port)/\(token)/k.key")
+                }
                 let kind = up.hasPrefix("#EXT-X-MEDIA") || up.hasPrefix("#EXT-X-I-FRAME") ? "p.m3u8" : "r"
                 return line.replacingOccurrences(of: m[1], with: local(m[1], kind))
             }

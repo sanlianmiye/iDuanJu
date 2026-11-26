@@ -57,6 +57,7 @@ fun TVBoxConfigScreen(
     val ctx = LocalContext.current
 
     var urlText by remember { mutableStateOf("") }
+    var siteQuery by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf<String?>(null) }
     var statusError by remember { mutableStateOf(false) }
@@ -97,7 +98,14 @@ fun TVBoxConfigScreen(
     }
 
     val activeRepo = store.activeRepo
-    val visibleSites = activeRepo?.sites?.filter { !it.adult || adultUnlocked }.orEmpty()
+    val allVisibleSites = remember(activeRepo, adultUnlocked) {
+        activeRepo?.sites?.filter { !it.adult || adultUnlocked }.orEmpty()
+    }
+    val visibleSites = remember(allVisibleSites, siteQuery) {
+        val q = siteQuery.trim()
+        if (q.isEmpty()) allVisibleSites
+        else allVisibleSites.filter { it.name.contains(q, ignoreCase = true) || it.api.contains(q, ignoreCase = true) }
+    }
     val lives = activeRepo?.lives.orEmpty()
 
     Box(
@@ -345,7 +353,7 @@ fun TVBoxConfigScreen(
                         )
                         HorizontalDivider(Modifier.padding(vertical = 9.dp), thickness = 0.6.dp, color = c.text.copy(0.08f))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("${visibleSites.size} 点播站", color = c.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text("${allVisibleSites.size} 点播站", color = c.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             Text("·", color = c.secondary, fontSize = 12.sp)
                             Text("${lives.size} 直播源", color = c.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             if (activeRepo.skippedCount > 0) {
@@ -372,19 +380,55 @@ fun TVBoxConfigScreen(
                 }
             }
 
-            // 点播站点列表（开放式细线列表）
-            if (visibleSites.isNotEmpty() && activeRepo != null) {
-                item {
-                    Text(
-                        "点播站点（苹果 CMS API · ${visibleSites.size}）",
-                        color = c.secondary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
-                    )
+            // 点播站点列表（开放式细线列表，大量站点支持快速筛选）
+            if (allVisibleSites.isNotEmpty() && activeRepo != null) {
+                item(key = "sites-header") {
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        val suffix = if (siteQuery.isBlank()) "${allVisibleSites.size}" else "${visibleSites.size}/${allVisibleSites.size}"
+                        Text(
+                            "点播站点（苹果 CMS API · $suffix）",
+                            color = c.secondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp),
+                        )
+                        if (allVisibleSites.size > 12) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 6.dp)
+                                    .height(34.dp)
+                                    .clip(RoundedCornerShape(17.dp))
+                                    .background(c.text.copy(0.06f))
+                                    .border(0.7.dp, c.text.copy(0.09f), RoundedCornerShape(17.dp))
+                                    .padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Filled.Search, null, tint = c.secondary, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                    if (siteQuery.isEmpty()) Text("筛选点播站点名称或域名…", color = c.secondary, fontSize = 12.sp, maxLines = 1)
+                                    BasicTextField(
+                                        value = siteQuery,
+                                        onValueChange = { siteQuery = it },
+                                        singleLine = true,
+                                        textStyle = TextStyle(color = c.text, fontSize = 12.sp),
+                                        cursorBrush = SolidColor(c.accent),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                                if (siteQuery.isNotEmpty()) {
+                                    Text("清除", color = c.secondary, fontSize = 11.sp, modifier = Modifier.clickable { siteQuery = "" })
+                                }
+                            }
+                        }
+                    }
                 }
-                items(visibleSites, key = { it.key }) { site ->
-                    val host = remember(site.api) { runCatching { URI(site.api).host }.getOrNull() ?: "" }
+                items(visibleSites, key = { it.key }, contentType = { "site" }) { site ->
+                    val host = remember(site.api) {
+                        val s = site.api.substringAfter("://", "")
+                        s.substringBefore('/').substringBefore(':').substringBefore('?')
+                    }
                     val slow = site.latencyMs >= 400
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         Row(

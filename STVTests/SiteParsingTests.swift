@@ -126,6 +126,58 @@ final class SiteParsingTests: XCTestCase {
         XCTAssertEqual(s.map(\.url), ["https://hls.example.com/1080/master.m3u8?h=a", "https://hls.example.com/480/master.m3u8", "https://hls.example.com/240/x.m3u8?a=[1]"])
         XCTAssertEqual(s[0].quality, "1080p · HLS")
     }
+
+    func testYouPornRedTubeHQPorner() {
+        let yp = """
+        <div data-video-id="226194141" aria-label="Sample &amp; one"><a href="/watch/226194141/sample/"><img data-poster="https://fi1.ypncdn.com/t.jpg" alt="Sample &amp; one"></a><div class="video-duration tm_video_duration"><span>06:00</span></div></div>
+        <div data-video-id="9" aria-label="Hidden camera clip"><a href="/watch/9/x/"></a></div>
+        <a href="/?page=2">
+        """
+        let y = YouPornProvider.parseList(yp, page: 1)
+        XCTAssertEqual(y.items.map(\.seriesId), ["226194141"])
+        XCTAssertEqual(y.items[0].title, "Sample & one")
+        XCTAssertEqual(y.items[0].duration, 360)
+        XCTAssertEqual(y.items[0].cover, "https://fi1.ypncdn.com/t.jpg")
+        XCTAssertEqual(y.items[0].page, "https://www.youporn.com/watch/226194141/sample/")
+        XCTAssertTrue(y.hasMore)
+
+        let rt = """
+        <div class="video_block_wrapper js_mediaBookBounds "><a href="/190296431" data-video-id="190296431"><img data-src="https://ei-ph.rdtcdn.com/t.jpg"><span class="video-properties tm_video_duration">12:01</span></a><div class="video-title-wrapper"><a title="Sample one" class="video-title-text" href="/190296431">Sample one</a></div></div>
+        <div class="video_block_wrapper"><a href="/222222"></a><a title="Forced thing" class="video-title-text" href="/222222">x</a></div>
+        <a href="/hot?page=2">
+        """
+        let r = RedTubeProvider.parseList(rt, page: 1)
+        XCTAssertEqual(r.items.map(\.seriesId), ["190296431"])
+        XCTAssertEqual(r.items[0].duration, 721)
+        XCTAssertEqual(r.items[0].cover, "https://ei-ph.rdtcdn.com/t.jpg")
+        XCTAssertTrue(r.hasMore)
+
+        let page = "https://www.youporn.com/watch/1/"
+        let defs = AyloPlay.definitions(#"var playervars = {"mediaDefinitions":[{"format":"hls","videoUrl":"/media/hls?s=abc","remote":true},{"format":"mp4","videoUrl":"https://cdn.example.com/direct.mp4","remote":false},{"format":"hls","videoUrl":"https://www.redtubepremium.com/x","remote":true}]};"#, page: page)
+        XCTAssertEqual(defs.map(\.url), ["https://www.youporn.com/media/hls?s=abc", "https://cdn.example.com/direct.mp4"])
+        XCTAssertEqual(defs.map(\.remote), [true, false])
+        let media = #"[{"format":"hls","height":720,"videoUrl":"https://em.example.com/master.m3u8"},{"format":"mp4","height":480,"videoUrl":"https://em.example.com/480.mp4"}]"#
+        let streams = AyloPlay.ranked(AyloPlay.fromMediaJSON(media, referer: "https://www.youporn.com/", prefix: "yp"))
+        XCTAssertEqual(streams.map(\.url), ["https://em.example.com/master.m3u8", "https://em.example.com/480.mp4"])
+        XCTAssertEqual(streams[0].quality, "720p · HLS")
+        XCTAssertEqual(CoverHeaders.for(url: y.items[0].cover)["Referer"], "https://www.youporn.com/")
+
+        let hq = """
+        <section class="box feature"><a href="/hdporn/128681-sample_clip.html"><div onmouseleave='defaultImage("//fastporndelivery.hqporner.com/imgs/a_main.jpg","cover_128681")'></div></a><span>Sample clip</span><span>25m 45s</span></section>
+        <section class="box feature"><a href="/hdporn/9-hidden_camera.html"></a><span>Hidden camera clip</span></section>
+        <a href="/hdporn/2" class="pagi-btn">2</a>
+        """
+        let q = HQPornerProvider.parseList(hq, page: 1)
+        XCTAssertEqual(q.items.map(\.seriesId), ["128681"])
+        XCTAssertEqual(q.items[0].title, "Sample clip")
+        XCTAssertEqual(q.items[0].duration, 1545)
+        XCTAssertEqual(q.items[0].cover, "https://fastporndelivery.hqporner.com/imgs/a_main.jpg")
+        XCTAssertTrue(q.hasMore)
+        XCTAssertEqual(HQPornerProvider.embedURL(#"player.php?i=//mydaddy.cc/video/8774cb2370a7c308ca/"#), "https://mydaddy.cc/video/8774cb2370a7c308ca/")
+        let src = #"<source src="https://s10.bigcdn.cc/a/360.mp4" title="360p" type="video/mp4" /><source src="https://s10.bigcdn.cc/a/1080.mp4" title="1080p Full HD" type="video/mp4" />"#
+        XCTAssertEqual(HQPornerProvider.streams(src).map(\.url), ["https://s10.bigcdn.cc/a/1080.mp4", "https://s10.bigcdn.cc/a/360.mp4"])
+        XCTAssertEqual(HQPornerProvider.streams(src)[0].quality, "1080p · MP4")
+    }
 }
 
 /// Live reachability/stream table (`TEST_RUNNER_STV_LIVE_SITES=1`). Prints one row per site; asserts only

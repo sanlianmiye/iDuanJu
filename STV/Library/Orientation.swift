@@ -1,6 +1,28 @@
 import SwiftUI
 import UIKit
 
+/// Root-level status bar visibility gate so `.statusBarHidden` works reliably in portrait even inside
+/// nested `GeometryReader` -> `TabView` -> `NavigationStack` hierarchies on iOS 17+.
+@MainActor
+final class StatusBarGate: ObservableObject {
+    static let shared = StatusBarGate()
+    @Published private(set) var hidden = false
+
+    func setHidden(_ value: Bool, animated: Bool = true) {
+        guard hidden != value else { return }
+        if animated {
+            withAnimation(.easeInOut(duration: 0.2)) { hidden = value }
+        } else {
+            hidden = value
+        }
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for win in scene.windows {
+                win.rootViewController?.setNeedsStatusBarAppearanceUpdate()
+            }
+        }
+    }
+}
+
 /// Portrait by default on iPhone; unlock all orientations on iPad and while the player is on screen.
 final class OrientationGate: NSObject, UIApplicationDelegate {
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }

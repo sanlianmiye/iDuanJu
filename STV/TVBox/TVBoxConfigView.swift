@@ -8,6 +8,7 @@ struct TVBoxConfigView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText = ""
+    @State private var siteQuery = ""
     @State private var busy = false
     @State private var statusMsg: String?
     @State private var statusError = false
@@ -22,11 +23,15 @@ struct TVBoxConfigView: View {
 
     var body: some View {
         let activeRepo = store.activeRepo
-        let visibleSites = (activeRepo?.sites ?? []).filter { !$0.adult || gate.unlocked }
+        let allVisibleSites = (activeRepo?.sites ?? []).filter { !$0.adult || gate.unlocked }
+        let q = siteQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let visibleSites = q.isEmpty ? allVisibleSites : allVisibleSites.filter {
+            $0.name.lowercased().contains(q) || $0.api.lowercased().contains(q)
+        }
         let lives = activeRepo?.lives ?? []
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 // 单行 HTTP(S) 导入栏
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(STVTheme.secondary).font(.subheadline)
@@ -140,7 +145,7 @@ struct TVBoxConfigView: View {
                             .font(.caption2.monospaced()).foregroundStyle(STVTheme.secondary).lineLimit(1)
                         Divider().overlay(STVTheme.text.opacity(0.08)).padding(.vertical, 3)
                         HStack(spacing: 8) {
-                            Text("\(visibleSites.count) 点播站").font(.caption.weight(.semibold)).foregroundStyle(STVTheme.text)
+                            Text("\(allVisibleSites.count) 点播站").font(.caption.weight(.semibold)).foregroundStyle(STVTheme.text)
                             Text("·").foregroundStyle(STVTheme.secondary)
                             Text("\(lives.count) 直播源").font(.caption.weight(.semibold)).foregroundStyle(STVTheme.text)
                             if activeRepo.skippedCount > 0 {
@@ -155,76 +160,57 @@ struct TVBoxConfigView: View {
                     .padding(.horizontal, 16)
                 }
 
-                // 点播站点细线列表
-                if !visibleSites.isEmpty, let activeRepo {
-                    Text("点播站点（苹果 CMS API · \(visibleSites.count)）")
-                        .font(.caption.weight(.semibold)).foregroundStyle(STVTheme.secondary)
-                        .padding(.horizontal, 16).padding(.top, 6)
+                // 点播站点细线列表（懒加载，支持大量站点快速过滤）
+                if !allVisibleSites.isEmpty, let activeRepo {
+                    HStack {
+                        Text("点播站点（苹果 CMS API · \(visibleSites.count)\(q.isEmpty ? "" : "/\(allVisibleSites.count)")）")
+                            .font(.caption.weight(.semibold)).foregroundStyle(STVTheme.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16).padding(.top, 6)
 
-                    VStack(spacing: 0) {
-                        ForEach(visibleSites) { site in
-                            let slow = site.latencyMs >= 400
-                            let host = URL(string: site.api)?.host ?? ""
-                            let ping = site.latencyMs > 0 && site.latencyMs < 9999 ? " · \(site.latencyMs)ms" : (site.latencyMs >= 9999 ? " · 超时" : "")
-                            HStack(spacing: 11) {
-                                Circle()
-                                    .fill(!site.enabled ? STVTheme.secondary.opacity(0.4) : (slow ? STVTheme.accentWarm : Color(red: 0.37, green: 0.82, blue: 0.54)))
-                                    .frame(width: 7, height: 7)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 6) {
-                                        Text(site.name).font(.subheadline.weight(.semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
-                                        Text(slow ? "较慢" : "m3u8")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(slow ? STVTheme.secondary : STVTheme.accent)
-                                            .padding(.horizontal, 6).padding(.vertical, 1.5)
-                                            .background((slow ? STVTheme.glass : STVTheme.accent.opacity(0.15)), in: RoundedRectangle(cornerRadius: 5))
-                                    }
-                                    Text("\(host) · \(site.categories.count) 分类\(ping)")
-                                        .font(.caption2).foregroundStyle(slow ? STVTheme.accentWarm : STVTheme.secondary).lineLimit(1)
-                                }
-                                Spacer()
-                                Toggle("", isOn: Binding(
-                                    get: { site.enabled },
-                                    set: { store.setSiteEnabled(repoId: activeRepo.id, siteKey: site.key, enabled: $0) }
-                                )).labelsHidden().tint(STVTheme.accent)
+                    if allVisibleSites.count > 12 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(STVTheme.secondary)
+                            TextField("筛选点播站点名称或域名…", text: $siteQuery)
+                                .textInputAutocapitalization(.never)
+                                .font(.caption)
+                                .foregroundStyle(STVTheme.text)
+                            if !siteQuery.isEmpty {
+                                Button { siteQuery = "" } label: {
+                                    Image(systemName: "xmark.circle.fill").font(.caption).foregroundStyle(STVTheme.secondary)
+                                }.buttonStyle(.plain)
                             }
-                            .padding(.vertical, 10)
-                            if site.id != visibleSites.last?.id { Divider().overlay(STVTheme.text.opacity(0.07)) }
+                        }
+                        .padding(.horizontal, 12).frame(height: 34)
+                        .background(STVTheme.glass, in: Capsule())
+                        .overlay { Capsule().strokeBorder(STVTheme.glassBorder) }
+                        .padding(.horizontal, 16)
+                    }
+
+                    LazyVStack(spacing: 0) {
+                        ForEach(visibleSites) { site in
+                            TVBoxSiteRow(site: site, showDivider: site.id != visibleSites.last?.id) { enabled in
+                                store.setSiteEnabled(repoId: activeRepo.id, siteKey: site.key, enabled: enabled)
+                            }
                         }
                     }.padding(.horizontal, 16)
                 }
 
-                // 直播列表细线列表
+                // 直播列表细线列表（懒加载）
                 if !lives.isEmpty, let activeRepo {
                     Text("直播列表（HTTP(S) M3U / TXT · \(lives.count)）")
                         .font(.caption.weight(.semibold)).foregroundStyle(STVTheme.secondary)
                         .padding(.horizontal, 16).padding(.top, 10)
 
-                    VStack(spacing: 0) {
+                    LazyVStack(spacing: 0) {
                         ForEach(lives) { live in
-                            HStack(spacing: 11) {
-                                Circle().fill(Color(red: 1.0, green: 0.42, blue: 0.42)).frame(width: 7, height: 7)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(live.name).font(.subheadline.weight(.semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
-                                    Text(live.channels.isEmpty ? "进入观看时自动拉取频道列表" : "\(live.channels.count) 个频道 · HTTP(S) 直播源")
-                                        .font(.caption2).foregroundStyle(STVTheme.secondary).lineLimit(1)
-                                }
-                                Spacer()
-                                Button {
-                                    Router.push(.tvboxLive(activeRepo.id, live.id, 0))
-                                } label: {
-                                    Text("观看")
-                                        .font(.caption.weight(.semibold)).foregroundStyle(STVTheme.accent)
-                                        .padding(.horizontal, 11).frame(height: 28)
-                                        .background(STVTheme.accent.opacity(0.15), in: Capsule())
-                                }.buttonStyle(.plain)
-                                Toggle("", isOn: Binding(
-                                    get: { live.enabled },
-                                    set: { store.setLiveEnabled(repoId: activeRepo.id, liveId: live.id, enabled: $0) }
-                                )).labelsHidden().tint(STVTheme.accent)
-                            }
-                            .padding(.vertical, 10)
-                            if live.id != lives.last?.id { Divider().overlay(STVTheme.text.opacity(0.07)) }
+                            TVBoxLiveRow(
+                                live: live,
+                                showDivider: live.id != lives.last?.id,
+                                onWatch: { Router.push(.tvboxLive(activeRepo.id, live.id, 0)) },
+                                onToggle: { store.setLiveEnabled(repoId: activeRepo.id, liveId: live.id, enabled: $0) }
+                            )
                         }
                     }.padding(.horizontal, 16)
                 }
@@ -352,6 +338,78 @@ struct TVBoxConfigView: View {
                 statusError = true
             }
             busy = false
+        }
+    }
+}
+
+private struct TVBoxSiteRow: View {
+    let site: TVBoxRepoSite
+    let showDivider: Bool
+    let onToggle: (Bool) -> Void
+
+    private static func fastHost(_ api: String) -> String {
+        guard let schemeEnd = api.range(of: "://") else { return "" }
+        let rest = api[schemeEnd.upperBound...]
+        let end = rest.firstIndex(where: { $0 == "/" || $0 == ":" || $0 == "?" }) ?? rest.endIndex
+        return String(rest[..<end])
+    }
+
+    var body: some View {
+        let slow = site.latencyMs >= 400
+        let host = Self.fastHost(site.api)
+        let ping = site.latencyMs > 0 && site.latencyMs < 9999 ? " · \(site.latencyMs)ms" : (site.latencyMs >= 9999 ? " · 超时" : "")
+        VStack(spacing: 0) {
+            HStack(spacing: 11) {
+                Circle()
+                    .fill(!site.enabled ? STVTheme.secondary.opacity(0.4) : (slow ? STVTheme.accentWarm : Color(red: 0.37, green: 0.82, blue: 0.54)))
+                    .frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(site.name).font(.subheadline.weight(.semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
+                        Text(slow ? "较慢" : "m3u8")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(slow ? STVTheme.secondary : STVTheme.accent)
+                            .padding(.horizontal, 6).padding(.vertical, 1.5)
+                            .background((slow ? STVTheme.glass : STVTheme.accent.opacity(0.15)), in: RoundedRectangle(cornerRadius: 5))
+                    }
+                    Text("\(host) · \(site.categories.count) 分类\(ping)")
+                        .font(.caption2).foregroundStyle(slow ? STVTheme.accentWarm : STVTheme.secondary).lineLimit(1)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(get: { site.enabled }, set: onToggle)).labelsHidden().tint(STVTheme.accent)
+            }
+            .padding(.vertical, 10)
+            if showDivider { Divider().overlay(STVTheme.text.opacity(0.07)) }
+        }
+    }
+}
+
+private struct TVBoxLiveRow: View {
+    let live: TVBoxRepoLive
+    let showDivider: Bool
+    let onWatch: () -> Void
+    let onToggle: (Bool) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 11) {
+                Circle().fill(Color(red: 1.0, green: 0.42, blue: 0.42)).frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(live.name).font(.subheadline.weight(.semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
+                    Text(live.channels.isEmpty ? "进入观看时自动拉取频道列表" : "\(live.channels.count) 个频道 · HTTP(S) 直播源")
+                        .font(.caption2).foregroundStyle(STVTheme.secondary).lineLimit(1)
+                }
+                Spacer()
+                Button(action: onWatch) {
+                    Text("观看")
+                        .font(.caption.weight(.semibold)).foregroundStyle(STVTheme.accent)
+                        .padding(.horizontal, 11).frame(height: 28)
+                        .background(STVTheme.accent.opacity(0.15), in: Capsule())
+                }.buttonStyle(.plain)
+                Toggle("", isOn: Binding(get: { live.enabled }, set: onToggle)).labelsHidden().tint(STVTheme.accent)
+            }
+            .padding(.vertical, 10)
+            if showDivider { Divider().overlay(STVTheme.text.opacity(0.07)) }
         }
     }
 }

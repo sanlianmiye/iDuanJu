@@ -20,7 +20,11 @@ object HGDetailExtras {
     /** Set by HongguoClient init; only its pure parsing helpers are used. */
     @Volatile lateinit var parser: HongguoClient
     private fun looksSID(s: String) = s.length in 15..25 && s.all { it.isDigit() }
-    private val web = OkHttpClient.Builder().callTimeout(7, TimeUnit.SECONDS).followRedirects(true).build()
+    private val web = OkHttpClient.Builder()
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
 
     fun webDetail(sid: String): HGWebDetail {
         if (!looksSID(sid)) throw ProviderException.invalid("seriesId")
@@ -28,7 +32,19 @@ object HGDetailExtras {
             .header("User-Agent", WEB_UA)
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
             .header("Accept-Language", "zh-CN,zh;q=0.9").header("Referer", "$WEB_ORIGIN/").build()
-        val html = web.newCall(req).execute().use { it.body?.string() ?: "" }
+        var html = ""
+        var lastErr: Exception? = null
+        for (attempt in 0..1) {
+            if (attempt > 0) Thread.sleep(300)
+            try {
+                html = web.newCall(req).execute().use { resp ->
+                    if (resp.code !in 200..299) throw ProviderException.upstream("官网 HTTP ${resp.code}")
+                    resp.body?.string() ?: ""
+                }
+                if (html.isNotEmpty()) break
+            } catch (e: Exception) { lastErr = e }
+        }
+        if (html.isEmpty()) throw (lastErr ?: ProviderException.upstream("官网响应为空"))
         val router = routerData(html) ?: throw ProviderException.upstream("官网页面缺少 _ROUTER_DATA")
         val ld = J.dict(router.opt("loaderData"))
         val page = J.dict(ld.opt("player_(series_id)/page") ?: ld.opt("player_(series_id)/(vid)/page") ?: ld.opt("detail_page"))
@@ -36,10 +52,19 @@ object HGDetailExtras {
         if (J.str(sd.opt("series_id")) != sid) throw ProviderException.upstream("官网返回的剧集不一致")
         val w = HGWebDetail()
         w.title = J.str(sd.opt("series_name"))
+        w.cover = J.str(sd.opt("series_cover"))
         w.intro = J.str(sd.opt("series_intro")).trim()
         w.tags = J.arr(sd.opt("tags")).map { J.str(it).trim() }.filter { it.isNotEmpty() }
         w.episodeLabel = J.str(sd.opt("episode_right_text")).trim()
         w.seriesGroupId = J.str(J.dict(sd.opt("season_info")).opt("series_group_id"))
+        w.onlineTime = J.unix(sd.opt("first_visible_time"))
+        val vids = ArrayList<HGEpisode>()
+        J.arr(sd.opt("vid_list")).forEachIndexed { idx, raw ->
+            val vid = J.str(raw).trim()
+            if (looksSID(vid)) vids.add(HGEpisode(idx + 1, vid, 0, "第${idx + 1}集"))
+        }
+        w.episodes = vids
+        w.totalEps = maxOf(J.int(sd.opt("episode_cnt")), J.int(J.dict(sd.opt("series_episode_info")).opt("episode_total_cnt")), vids.size)
         val seen = HashSet<String>(); val cast = ArrayList<HGCelebrity>()
         for (e in J.arr(sd.opt("celebrities"))) {
             val m = J.dict(e)
@@ -78,15 +103,87 @@ object HGDetailExtras {
 
     fun enrich(d: HGSeriesDetail, w: HGWebDetail?): HGSeriesDetail {
         if (w == null) return d
-        d.cast = w.cast; d.tags = w.tags; d.favoriteCount = w.favoriteCount; d.episodeLabel = w.episodeLabel
-        if (d.desc.isEmpty()) d.desc = w.intro
-        if (w.cast.isNotEmpty()) {
-            if (d.title.isEmpty()) d.title = w.title
-            d.actors = w.cast.map { it.name } // real performer names beat role names from book_info.roles
-        }
-        d.rating = w.rating; d.ratingCount = w.ratingCount; d.hotText = w.hotText
-        return d
+        val nextTitle = if (d.title.isEmpty()) w.title else d.title
+        val nextCover = if (d.cover.isEmpty()) w.cover else d.cover
+        val nextDesc = if (d.desc.isEmpty()) w.intro else d.desc
+        val nextActors = if (w.cast.isNotEmpty()) w.cast.map { it.name } else d.actors
+        val nextEps = if (d.episodes.isEmpty() && w.episodes.isNotEmpty()) w.episodes else d.episodes
+        val nextTotal = maxOf(d.totalEps, w.totalEps, nextEps.size)
+        val nextOnline = if (d.onlineTime == 0L) w.onlineTime else d.onlineTime
+        return d.copy(
+            title = nextTitle,
+            cover = nextCover,
+            desc = nextDesc,
+            actors = nextActors,
+            onlineTime = nextOnline,
+            totalEps = nextTotal,
+            episodes = nextEps,
+            cast = if (w.cast.isNotEmpty()) w.cast else d.cast,
+            tags = if (w.tags.isNotEmpty()) w.tags else d.tags,
+            favoriteCount = if (w.favoriteCount > 0) w.favoriteCount else d.favoriteCount,
+            episodeLabel = w.episodeLabel.ifEmpty { d.episodeLabel },
+            rating = if (w.rating > 0.0) w.rating else d.rating,
+            ratingCount = w.ratingCount.ifEmpty { d.ratingCount },
+            hotText = w.hotText.ifEmpty { d.hotText },
+        )
     }
+
+    data class SeriesLandRef(val stickIds: String = "", val from: String = "", val query: String = "", val bookId: String = "")
+
+    fun seriesLandFromCell(cell: JSONObject): SeriesLandRef {
+        val ld = when (val raw = cell.opt("lynx_data")) {
+            is JSONObject -> raw
+            is String -> try { JSONObject(raw) } catch (_: Exception) { JSONObject() }
+            else -> JSONObject()
+        }
+        val cellURL = J.str(cell.opt("cell_url")).ifEmpty { J.str(ld.opt("cell_url")) }
+        val vals = parseLynxQuery(cellURL)
+        var stickIds = vals["stick_ids"].orEmpty().ifEmpty { joinStickIds(stickIdsFromQuery(cellURL)) }
+        if (stickIds.isEmpty()) stickIds = joinStickIds(stickIdsFromQuery(J.str(ld.opt("cell_url"))))
+        if (stickIds.isEmpty() && ld.length() > 0) {
+            val ids = J.arr(ld.opt("cell_data")).flatMap { parseCellVideoData(J.dict(it)) }.map { it.seriesId }.filter(::looksSID)
+            stickIds = joinStickIds(ids)
+        }
+        val bookId = vals["book_id"].orEmpty().ifEmpty { J.str(cell.opt("book_id")) }.takeIf(::looksSID).orEmpty()
+        return SeriesLandRef(
+            stickIds = stickIds,
+            from = vals["from"].orEmpty().ifEmpty { "same_ip_same_series_land_page" },
+            query = vals["query"].orEmpty(),
+            bookId = bookId,
+        )
+    }
+
+    private fun parseLynxQuery(raw: String): Map<String, String> {
+        if (raw.isEmpty()) return emptyMap()
+        val out = LinkedHashMap<String, String>()
+        var walk = raw
+        repeat(4) {
+            val dec = runCatching { URLDecoder.decode(walk, "UTF-8") }.getOrDefault(walk)
+            if (dec == walk) return@repeat
+            walk = dec
+        }
+        val qPart = walk.substringAfter('?', walk)
+        for (part in qPart.split('&')) {
+            val idx = part.indexOf('='); if (idx <= 0) continue
+            val k = part.substring(0, idx)
+            val v = runCatching { URLDecoder.decode(part.substring(idx + 1), "UTF-8") }.getOrElse { part.substring(idx + 1) }
+            if (v.isNotEmpty() && !out.containsKey(k)) out[k] = v
+        }
+        val inner = out["url"]
+        if (!inner.isNullOrEmpty() && inner != raw) {
+            for ((k, v) in parseLynxQuery(inner)) if (!out.containsKey(k)) out[k] = v
+        }
+        return out
+    }
+
+    private fun stickIdsFromQuery(raw: String): List<String> {
+        val idx = raw.indexOf("stick_ids="); if (idx < 0) return emptyList()
+        var rest = raw.substring(idx + "stick_ids=".length).substringBefore('&')
+        rest = runCatching { URLDecoder.decode(rest, "UTF-8") }.getOrDefault(rest)
+        return rest.split(',').map { it.trim() }.filter(::looksSID)
+    }
+
+    private fun joinStickIds(ids: List<String>): String = ids.filter(::looksSID).distinct().joinToString(",")
 
     // ---- series landing (plan/v scene=10) ----
     private fun qe(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")

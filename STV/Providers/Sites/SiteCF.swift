@@ -17,6 +17,9 @@ extension DramaSource {
         case .xvideos: XVProvider.xvMirrors
         case .xnxx: XVProvider.xnMirrors
         case .pornhub: PornhubProvider.mirrors
+        case .youporn: YouPornProvider.mirrors
+        case .redtube: RedTubeProvider.mirrors
+        case .hqporner: HQPornerProvider.mirrors
         case .telegram: [TGClient.defaultBase]
         case .huangguo: [HuangguoClient.videoBase]
         default: []

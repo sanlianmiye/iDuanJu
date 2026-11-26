@@ -146,12 +146,25 @@ struct HomeView: View {
         .compatOnChange(of: SourceGate.shared.visibleSites) { if !HomeSource.all.contains(source) { source = .hongguo } }
     }
 
+    /// Use the currently visible home source as the initial search provider.
+    private var activeSearchSource: DramaSource {
+        switch source {
+        case .hongguo: return .hongguo
+        case .huangguo: return .huangguo
+        case .site(let site): return site
+        case .ai:
+            if case .some(.huangguo(.ai)) = subs[.ai] { return .huangguo }
+            return .hongguo
+        case .channels, .manga, .novel: return .hongguo
+        }
+    }
+
     // MARK: Header (search + filter, source bar)
 
     private var header: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                NavigationLink(value: Route.search) {
+                NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
                     DSSearchBarLabel()
                         .padding(.leading, 16).frame(height: 46).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityIdentifier("home.search")
@@ -393,27 +406,60 @@ private struct DynamicSiteFeed: View {
     @State private var selected = ""
     @StateObject private var pager = Pager()
     @State private var heroCover: String?
+    @State private var didLoad = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if categories.count > 1 { chips }
-                if let e = pager.error, pager.items.isEmpty {
-                    ErrorStateView(error: e) { reload(selected) }
-                } else if pager.items.isEmpty && pager.isLoading {
-                    cardsSkeleton.padding(.horizontal, 16)
-                } else if pager.items.isEmpty {
-                    CompatEmptyStateView(title: "该分类暂无内容", systemImage: "rectangle.stack", description: "部分采集站的父分类不直接提供资源，请选择动作片、国产剧等具体分类。")
-                } else {
-                    NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Color.clear.frame(height: 0).id("dynamic.top")
+                        if categories.count > 1 { chips }
+                        if let e = pager.error, pager.items.isEmpty {
+                            ErrorStateView(error: e) { reload(selected) }
+                        } else if pager.items.isEmpty && pager.isLoading {
+                            cardsSkeleton.padding(.horizontal, 16)
+                        } else if pager.items.isEmpty {
+                            CompatEmptyStateView(title: "该分类暂无内容", systemImage: "rectangle.stack", description: "部分采集站的父分类不直接提供资源，请选择动作片、国产剧等具体分类。")
+                        } else {
+                            NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
+                        }
+                    }
+                    .padding(.vertical, 8)
                 }
+                .scrollIndicators(.hidden)
+                .accessibilityIdentifier("home.page.\(source.label)")
+                .refreshable { await refresh() }
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("dynamic.top", anchor: .top) }
+                    Task { await refresh() }
+                } label: {
+                    Group {
+                        if pager.isLoading {
+                            ProgressView().tint(STVTheme.text)
+                        } else {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text)
+                        }
+                    }
+                    .frame(width: 44, height: 44)
+                    .background(STVTheme.glass, in: Circle())
+                    .overlay { Circle().strokeBorder(STVTheme.glassBorder, lineWidth: 1) }
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                }
+                .buttonStyle(PressScale())
+                .disabled(pager.isLoading)
+                .padding(.trailing, 18)
+                .padding(.bottom, 24)
+                .accessibilityLabel("刷新列表")
+                .accessibilityIdentifier("home.dynamic.refresh")
             }
-            .padding(.vertical, 8)
         }
-        .scrollIndicators(.hidden)
-        .accessibilityIdentifier("home.page.\(source.label)")
-        .refreshable { await refresh() }
-        .task { await refresh() }
+        .task {
+            guard !didLoad else { return }
+            didLoad = true
+            await refresh()
+        }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
     }
 
@@ -464,8 +510,18 @@ private struct DynamicSiteFeed: View {
             guard let provider = Sites.provider(source) else { throw ProviderError.unsupported(source.label) }
             let category = SiteCategory(id: id, title: "", path: id)
             let page = try await provider.list(category, page: max(1, prev.nextOffset ?? 1))
-            if (prev.nextOffset ?? 1) <= 1, let cover = page.items.first?.cover, !cover.isEmpty {
-                await MainActor.run { heroCover = cover }
+            if (prev.nextOffset ?? 1) <= 1 {
+                if let cover = page.items.first?.cover, !cover.isEmpty {
+                    await MainActor.run { heroCover = cover }
+                }
+                if source.pluginID != nil {
+                    let latestCats = provider.categories
+                    if !latestCats.isEmpty {
+                        await MainActor.run {
+                            if categories.map(\.id) != latestCats.map(\.id) { categories = latestCats }
+                        }
+                    }
+                }
             }
             return page
         }
@@ -483,8 +539,8 @@ private struct DynamicSiteFeed: View {
         }
         let fallback = SiteCategory(id: "", title: "推荐", path: "")
         guard let provider = Sites.provider(source) else { return [fallback] }
-        let categories = provider.categories.filter { !$0.id.isEmpty }
-        return [fallback] + categories
+        let cats = provider.categories
+        return cats.isEmpty ? [fallback] : cats
     }
 }
 

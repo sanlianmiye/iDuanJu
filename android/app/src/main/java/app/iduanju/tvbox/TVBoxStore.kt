@@ -423,8 +423,9 @@ class TVBoxStore(ctx: Context) {
     ): TVBoxRepo {
         val parsed = TVBoxImport.parse(jsonText)
         val validSites = arrayListOf<TVBoxRepoSite>()
+        val validationSites = if (parsed.sites.size > 60) parsed.sites.take(8) else parsed.sites
         var checked = 0
-        for (batch in parsed.sites.chunked(8)) {
+        for (batch in validationSites.chunked(8)) {
             val batchRes = coroutineScope {
                 batch.map { site ->
                     async {
@@ -452,13 +453,29 @@ class TVBoxStore(ctx: Context) {
                 }
             }
             withContext(Dispatchers.Main) {
-                onProgress("正在验证点播站 $checked/${parsed.sites.size}（可用 ${validSites.size}）")
+                onProgress("正在验证点播站 $checked/${validationSites.size}（可用 ${validSites.size}）")
             }
+        }
+        val finalSites: List<TVBoxRepoSite> = if (validationSites.size < parsed.sites.size) {
+            require(validSites.isNotEmpty() || parsed.lives.isNotEmpty()) {
+                "大配置没有验证出可用的苹果 CMS 站点（已跳过 ${parsed.skipped} 个不兼容项）"
+            }
+            val verified = validSites.associateBy { it.key }
+            val merged = parsed.sites.map { site ->
+                verified[CMSSite.key(site.api)] ?: TVBoxRepoSite(
+                    key = CMSSite.key(site.api), name = site.name, api = site.api,
+                    adult = site.adult, enabled = true, categories = emptyList(), latencyMs = -1,
+                )
+            }
+            withContext(Dispatchers.Main) { onProgress("大配置已导入 ${merged.size} 个点播站，其余进入后按需验证") }
+            merged
+        } else {
+            validSites
         }
         val lives = parsed.lives.map { l ->
             TVBoxRepoLive(id = hashId(l.url), name = l.name, url = l.url, enabled = true, channels = emptyList())
         }
-        require(validSites.isNotEmpty() || lives.isNotEmpty()) {
+        require(finalSites.isNotEmpty() || lives.isNotEmpty()) {
             "配置里没有可用的苹果 CMS 点播站或 HTTPS 直播源（已跳过 ${parsed.skipped} 个不兼容项）"
         }
         val title = when {
@@ -467,14 +484,14 @@ class TVBoxStore(ctx: Context) {
             !sourceUrl.isNullOrBlank() -> runCatching { URI(sourceUrl).host }.getOrNull() ?: parsed.name
             else -> parsed.name
         }
-        val id = hashId(sourceUrl ?: (title + validSites.firstOrNull()?.api.orEmpty() + lives.firstOrNull()?.url.orEmpty()))
+        val id = hashId(sourceUrl ?: (title + finalSites.firstOrNull()?.api.orEmpty() + lives.firstOrNull()?.url.orEmpty()))
         val repo = TVBoxRepo(
             id = id,
             name = title,
             url = sourceUrl,
-            sites = validSites,
+            sites = finalSites,
             lives = lives,
-            skippedCount = parsed.skipped + (parsed.sites.size - validSites.size),
+            skippedCount = parsed.skipped + (parsed.sites.size - finalSites.size),
             updatedAt = System.currentTimeMillis(),
         )
         withContext(Dispatchers.Main) { upsertAndActivate(repo) }
@@ -536,15 +553,29 @@ class TVBoxStore(ctx: Context) {
         }
     }
 
+    private val saveExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "tvbox-save").apply { isDaemon = true }
+    }
+    @Volatile private var pendingSave: java.util.concurrent.ScheduledFuture<*>? = null
+
     private fun save() {
-        runCatching {
-            val root = JSONObject()
-                .put("activeRepoId", activeRepoId ?: "")
-                .put("repos", JSONArray(repos.map { it.toJSON() }))
-                .put("favoriteChannels", JSONArray(favoriteChannels))
-                .put("recentWatches", JSONArray(recentWatches.map { it.toJSON() }))
-            file.writeText(root.toString(), Charsets.UTF_8)
-        }
+        val snapActive = activeRepoId ?: ""
+        val snapRepos = repos.toList()
+        val snapFavs = favoriteChannels.toList()
+        val snapRecent = recentWatches.toList()
+        pendingSave?.cancel(false)
+        pendingSave = saveExecutor.schedule({
+            runCatching {
+                val root = JSONObject()
+                    .put("activeRepoId", snapActive)
+                    .put("repos", JSONArray(snapRepos.map { it.toJSON() }))
+                    .put("favoriteChannels", JSONArray(snapFavs))
+                    .put("recentWatches", JSONArray(snapRecent.map { it.toJSON() }))
+                val tmp = File(file.parentFile, file.name + ".tmp")
+                tmp.writeText(root.toString(), Charsets.UTF_8)
+                if (!tmp.renameTo(file)) file.writeText(root.toString(), Charsets.UTF_8)
+            }
+        }, 200L, TimeUnit.MILLISECONDS)
     }
 
     private fun TVBoxLiveChannel.urlKey(): String = urls.firstOrNull().orEmpty()

@@ -98,7 +98,9 @@ internal fun MangaSourceStrip(
 fun MangaHomePage(onOpen: (String) -> Unit) {
     val c = IdjThemeColors
     val store = IdjApp.instance.manga
-    var source by remember { mutableStateOf(store.providers[0].source) }
+    val providers = store.providers
+    var source by remember { mutableStateOf(providers[0].source) }
+    LaunchedEffect(providers) { if (providers.none { it.source == source }) source = providers[0].source }
     val p = store.provider(source)
     var cat by remember(source) { mutableStateOf(p.categories[0]) }
     var query by remember { mutableStateOf("") }
@@ -125,7 +127,7 @@ fun MangaHomePage(onOpen: (String) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 6.dp)) {
-                MangaSourceStrip(store.providers.map { it.source to it.label }, source, { next ->
+                MangaSourceStrip(providers.map { it.source to it.label }, source, { next ->
                     if (next != source) { source = next; searching = null; query = "" }
                 })
                 Row(Modifier.fillMaxWidth().height(40.dp).clip(CircleShape).background(c.elevated).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {

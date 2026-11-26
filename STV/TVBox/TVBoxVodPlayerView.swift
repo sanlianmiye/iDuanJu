@@ -286,6 +286,8 @@ struct TVBoxVodPlayerView: View {
         }
         .background((fullscreen ? Color.black : STVTheme.bg).ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .statusBarHidden(fullscreen || !controlsVisible)
+        .persistentSystemOverlays(fullscreen ? .hidden : .automatic)
         .task(id: "\(activeSiteKey)|\(activeSeriesId)") {
             await loadDetail(siteKey: activeSiteKey, seriesId: activeSeriesId)
             await loadCrossSiteMatches(title: resolvedTitle, excludeSiteKey: activeSiteKey)
@@ -307,7 +309,14 @@ struct TVBoxVodPlayerView: View {
                 }
             }
         }
+        .onAppear {
+            StatusBarGate.shared.setHidden(fullscreen || !controlsVisible, animated: false)
+        }
+        .compatOnChange(of: fullscreen || !controlsVisible) { hideBar in
+            StatusBarGate.shared.setHidden(hideBar)
+        }
         .onDisappear {
+            StatusBarGate.shared.setHidden(false)
             player.stop()
             OrientationGate.lockPortrait()
         }

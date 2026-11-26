@@ -278,7 +278,7 @@ final class TVBoxStore: ObservableObject {
     private func importParsedJSON(_ data: Data, sourceURL: String?, fallbackName: String?, onProgress: @MainActor (String) -> Void) async throws -> TVBoxRepo {
         let parsed = try TVBoxImport.parse(data)
         var validSites: [TVBoxRepoSite] = []
-        let validationSites = parsed.sites.count > 200 ? Array(parsed.sites.prefix(8)) : parsed.sites
+        let validationSites = parsed.sites.count > 60 ? Array(parsed.sites.prefix(8)) : parsed.sites
         var checked = 0
         for offset in stride(from: 0, to: validationSites.count, by: 8) {
             let slice = Array(validationSites[offset..<min(offset + 8, validationSites.count)])
@@ -368,11 +368,20 @@ final class TVBoxStore: ObservableObject {
         recentWatches = snap.recentWatches
     }
 
+    private static let saveQueue = DispatchQueue(label: "stv.tvbox.save", qos: .utility)
+    private var pendingSave: DispatchWorkItem?
+
     private func save() {
         let snap = TVBoxStoreSnapshot(activeRepoId: activeRepoId, repos: repos, favoriteChannels: favoriteChannels, recentWatches: recentWatches)
-        if let data = try? JSONEncoder().encode(snap) {
-            try? data.write(to: fileURL, options: .atomic)
+        let targetURL = fileURL
+        pendingSave?.cancel()
+        let work = DispatchWorkItem {
+            if let data = try? JSONEncoder().encode(snap) {
+                try? data.write(to: targetURL, options: .atomic)
+            }
         }
+        pendingSave = work
+        Self.saveQueue.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     nonisolated static func hashId(_ seed: String) -> String {

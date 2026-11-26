@@ -66,6 +66,7 @@ enum Route: Hashable {
     case play(HGSeries, Int?)
     case actor(HGCelebrity)
     case search
+    case searchFromSource(DramaSource)
     case searchFor(String)
     case actorRank
     case favorites
@@ -109,6 +110,7 @@ extension View {
             case .play(let s, let i): VerticalPlayerView(series: s, startIndex: i)
             case .actor(let a): ActorView(actor: a)
             case .search: SearchView(pushed: true)
+            case .searchFromSource(let source): SearchView(pushed: true, initialSource: source)
             case .searchFor(let q): SearchView(pushed: true, initialQuery: q)
             case .actorRank: ActorRankView()
             case .favorites: LibraryListView(kind: .favorites)

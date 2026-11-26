@@ -148,9 +148,17 @@ struct PluginsView: View {
 
     private var hiddenAdult: Int { store.plugins.count - store.visiblePlugins.count }
 
-    /// Bundled plugins offered for install; adult ones only behind the 成人漫画源 switch.
+    /// Bundled plugins offered for install; skip video sites that iOS already ships natively in 片源管理.
+    private static let iosNativeBundledIDs: Set<String> = [
+        "com.idj.bundled.jable", "com.idj.bundled.missav", "com.idj.bundled.hanime1", "com.idj.bundled.eporner",
+        "com.idj.bundled.xvideos", "com.idj.bundled.xnxx", "com.idj.bundled.pornhub", "com.idj.bundled.youporn",
+        "com.idj.bundled.redtube", "com.idj.bundled.hqporner",
+    ]
     private var recommended: [(name: String, manifest: PluginManifest, data: Data)] {
-        PluginInstaller.bundled().filter { !$0.manifest.adult || ($0.manifest.type == .comic ? gate.showAdultManga : gate.unlocked) }
+        PluginInstaller.bundled().filter {
+            !Self.iosNativeBundledIDs.contains($0.manifest.id)
+                && (!$0.manifest.adult || ($0.manifest.type == .comic ? gate.showAdultManga : gate.unlocked))
+        }
     }
 
     private func prepare(_ work: @escaping () async throws -> PendingInstall) {

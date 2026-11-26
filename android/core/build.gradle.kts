@@ -17,6 +17,7 @@ tasks.test {
     project.findProperty("cmsApi")?.let { systemProperty("idj.cmsApi", it.toString()) }
     testLogging { showStandardStreams = true }
     project.findProperty("hgDevice")?.let { systemProperty("idj.hgDevice", it.toString()) }
+    project.findProperty("bindLocal")?.let { systemProperty("idj.bindLocal", it.toString()) }
     testLogging { events("passed", "failed", "skipped"); showStandardStreams = true; exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }
 

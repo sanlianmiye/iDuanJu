@@ -58,11 +58,13 @@ internal data class ShelfEntry(
 private enum class ShelfFilter(val label: String) { All("全部"), Reading("在读"), Local("本地") }
 
 /** Novel shelf aligned with HomeScreen's STVTheme language: one atmospheric hero banner, borderless quick strip, open 3-col grid. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun NovelShelf(
     entries: List<ShelfEntry>,
     onContinue: (ShelfEntry) -> Unit,
     onBook: (ShelfEntry) -> Unit,
+    onDelete: (List<ShelfEntry>) -> Unit = {},
     onImport: () -> Unit,
     onSearch: () -> Unit,
     onRank: () -> Unit,
@@ -71,6 +73,10 @@ internal fun NovelShelf(
 ) {
     val c = IdjThemeColors
     var filter by remember { mutableStateOf(ShelfFilter.All) }
+    var managing by remember { mutableStateOf(false) }
+    var selectedKeys by remember { mutableStateOf(setOf<String>()) }
+    var confirmTargets by remember { mutableStateOf<List<ShelfEntry>>(emptyList()) }
+    fun entryKey(e: ShelfEntry) = "${e.sourceId}|${e.book.url}"
     val hero = remember(entries) { entries.firstOrNull { it.currentChapter >= 0 } ?: entries.firstOrNull() }
     val filtered = remember(entries, filter) {
         when (filter) {
@@ -78,6 +84,9 @@ internal fun NovelShelf(
             ShelfFilter.Reading -> entries.filter { it.currentChapter >= 0 }
             ShelfFilter.Local -> entries.filter { it.isLocal }
         }
+    }
+    LaunchedEffect(entries.size) {
+        if (entries.isEmpty()) { managing = false; selectedKeys = emptySet() }
     }
 
     LazyColumn(
@@ -134,29 +143,85 @@ internal fun NovelShelf(
                 }
                 Spacer(Modifier.weight(1f))
                 if (entries.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        ShelfFilter.entries.forEach { f ->
-                            val on = f == filter
-                            Box(
-                                Modifier
-                                    .height(24.dp)
-                                    .clip(CircleShape)
-                                    .background(if (on) c.accentSoft else Color.Transparent)
-                                    .pressClick(0.95f) { filter = f }
-                                    .padding(horizontal = 9.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    f.label,
-                                    color = if (on) c.accent else c.secondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                                )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (!managing) {
+                            ShelfFilter.entries.forEach { f ->
+                                val on = f == filter
+                                Box(
+                                    Modifier
+                                        .height(24.dp)
+                                        .clip(CircleShape)
+                                        .background(if (on) c.accentSoft else Color.Transparent)
+                                        .pressClick(0.95f) { filter = f }
+                                        .padding(horizontal = 9.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        f.label,
+                                        color = if (on) c.accent else c.secondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                                    )
+                                }
                             }
+                        }
+                        Box(
+                            Modifier
+                                .height(24.dp)
+                                .clip(CircleShape)
+                                .background(if (managing) c.accentSoft else c.glass)
+                                .pressClick(0.95f) {
+                                    managing = !managing
+                                    if (!managing) selectedKeys = emptySet()
+                                }
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                if (managing) "完成" else "管理",
+                                color = if (managing) c.accent else c.text,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                 } else {
                     MoreLink("导入", onClick = onImport)
+                }
+            }
+        }
+        if (managing && filtered.isNotEmpty()) {
+            item(key = "manage-bar") {
+                val allSelected = filtered.all { entryKey(it) in selectedKeys }
+                val picked = entries.filter { entryKey(it) in selectedKeys }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 12.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(c.surface)
+                        .border(0.7.dp, c.hairline, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (allSelected) "取消全选" else "全选 (${filtered.size})",
+                        color = c.accent,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable {
+                            selectedKeys = if (allSelected) emptySet() else filtered.map(::entryKey).toSet()
+                        },
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        if (picked.isEmpty()) "点击书籍勾选" else "删除所选 (${picked.size})",
+                        color = if (picked.isEmpty()) c.secondary else c.accentWarm,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable(enabled = picked.isNotEmpty()) { confirmTargets = picked },
+                    )
                 }
             }
         }
@@ -178,12 +243,45 @@ internal fun NovelShelf(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     row.forEach { entry ->
-                        ShelfBookCell(entry, Modifier.weight(1f)) { onBook(entry) }
+                        val k = entryKey(entry)
+                        val checked = k in selectedKeys
+                        ShelfBookCell(
+                            entry = entry,
+                            modifier = Modifier.weight(1f),
+                            managing = managing,
+                            selected = checked,
+                            onClick = {
+                                if (managing) {
+                                    selectedKeys = if (checked) selectedKeys - k else selectedKeys + k
+                                } else {
+                                    onBook(entry)
+                                }
+                            },
+                            onLongClick = { confirmTargets = listOf(entry) },
+                        )
                     }
                     repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
+    }
+    if (confirmTargets.isNotEmpty()) {
+        val label = if (confirmTargets.size == 1) "「${confirmTargets.first().book.name}」" else "所选的 ${confirmTargets.size} 本书"
+        AlertDialog(
+            onDismissRequest = { confirmTargets = emptyList() },
+            title = { Text("从书架删除$label？") },
+            text = { Text("会同时清除本机缓存与阅读记录。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val toRemove = confirmTargets
+                    confirmTargets = emptyList()
+                    onDelete(toRemove)
+                    selectedKeys = selectedKeys - toRemove.map(::entryKey).toSet()
+                    if (managing && selectedKeys.isEmpty()) managing = false
+                }) { Text("删除", color = c.accentWarm) }
+            },
+            dismissButton = { TextButton(onClick = { confirmTargets = emptyList() }) { Text("取消") } },
+        )
     }
 }
 
@@ -305,17 +403,41 @@ private fun ShelfQuickOpen(icon: ImageVector, label: String, modifier: Modifier,
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ShelfBookCell(entry: ShelfEntry, modifier: Modifier, onClick: () -> Unit) {
+private fun ShelfBookCell(
+    entry: ShelfEntry,
+    modifier: Modifier,
+    managing: Boolean = false,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
+) {
     val c = IdjThemeColors
     val frac = entry.fraction
-    Column(modifier.pressClick(0.97f, onClick = onClick)) {
-        NovelPoster(
-            book = entry.book,
-            modifier = Modifier.fillMaxWidth().aspectRatio(0.71f),
-            badge = if (entry.isLocal) "TXT" else null,
-            progress = frac,
-        )
+    Column(modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(0.71f)) {
+            NovelPoster(
+                book = entry.book,
+                modifier = Modifier.fillMaxSize(),
+                badge = if (entry.isLocal) "TXT" else null,
+                progress = frac,
+            )
+            if (managing) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(if (selected) c.accent else Color.Black.copy(alpha = 0.45f))
+                        .border(1.5.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (selected) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
         Text(
             entry.book.name,
             color = c.text,
