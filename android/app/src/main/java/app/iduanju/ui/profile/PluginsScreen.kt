@@ -309,6 +309,6 @@ private fun CMSDialog(onDismiss: () -> Unit, onDone: (String, String, Boolean) -
 
 private fun typeLabel(t: String) = when (t) { "video" -> "长视频"; "shortdrama" -> "短剧"; "comic" -> "漫画"; "live" -> "直播"; else -> t }
 private fun originLabel(o: String) = when {
-    o == "内置" -> "i短剧"; o == "paste" -> "粘贴"; o == "file" -> "文件"; o.startsWith("订阅：") -> "订阅"
+    o == "内置" -> "汇看"; o == "paste" -> "粘贴"; o == "file" -> "文件"; o.startsWith("订阅：") -> "订阅"
     o.startsWith("https://") -> runCatching { java.net.URI(o).host }.getOrNull() ?: "网址"; else -> o
 }

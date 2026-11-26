@@ -177,7 +177,7 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
                 ActRow("清空播放缓存", ProfileIcons.trash, scope, { message = it }) { withContext(Dispatchers.IO) { java.io.File(ctx.cacheDir, "hg-play").deleteRecursively() }; "播放缓存已清空" }
             }
             val ver = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "" }
-            Text(message ?: "所有数据由本机直连上游，观看记录和收藏只保存在本机。\ni短剧 $ver",
+            Text(message ?: "所有数据由本机直连上游，观看记录和收藏只保存在本机。\n汇看 $ver",
                 color = if (message != null) c.accent else c.secondary, fontSize = 12.sp, lineHeight = 18.sp)
         }
     }

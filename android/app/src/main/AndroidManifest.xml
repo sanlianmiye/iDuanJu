@@ -16,7 +16,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/tv_banner"
-        android:label="i短剧"
+        android:label="汇看"
         android:supportsRtl="true"
         android:theme="@style/Theme.Idj"
         android:usesCleartextTraffic="true"

@@ -14,7 +14,7 @@ import app.iduanju.ui.theme.IdjThemeColors
 fun LicensesScreen(onBack: () -> Unit) {
     SettingsPage("开源许可", onBack) {
         Group {
-            License("i短剧", "GPL-3.0 · 禁止付费分发", "本应用源码以 GPL-3.0 开源。")
+            License("汇看", "GPL-3.0 · 禁止付费分发", "本应用源码以 GPL-3.0 开源。")
             RowDivider()
             License("AndroidX · Jetpack Compose · Media3", "Apache License 2.0", "界面、播放器（ExoPlayer、HLS、OkHttp 数据源）。")
             RowDivider()

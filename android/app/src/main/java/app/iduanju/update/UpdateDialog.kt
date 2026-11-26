@@ -47,7 +47,7 @@ fun UpdateDialog(u: AppUpdater) {
             when (phase) {
                 is AppUpdater.Phase.Downloading -> TextButton({}, enabled = false) { Text("下载中…") }
                 is AppUpdater.Phase.Ready -> TextButton({
-                    if (!u.install(phase.file)) hint = "请允许 i短剧「安装未知应用」，返回后再点一次「安装」。"
+                    if (!u.install(phase.file)) hint = "请允许 汇看「安装未知应用」，返回后再点一次「安装」。"
                 }) { Text("安装") }
                 is AppUpdater.Phase.Failed -> TextButton({ scope.launch { u.download(r) } }) { Text("重试") }
                 AppUpdater.Phase.Idle -> TextButton({ scope.launch { u.download(r) } }) { Text("更新") }
