@@ -361,7 +361,7 @@ fun PillButton(title: String, modifier: Modifier = Modifier, icon: ImageVector? 
         // crisp glass rim: bright on top, fading out toward the bottom
         .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.32f), Color.White.copy(alpha = 0.04f))), CircleShape)
     else Modifier.clip(CircleShape).background(bg)
-    Row(modifier.height(height ?: if (small) 32.dp else 48.dp).then(fill).pressClick(0.98f, enabled, title, CircleShape, onClick)
+    Row(modifier.height(height ?: if (small) 32.dp else 48.dp).then(fill).pressClick(0.98f, enabled, title, CircleShape, onClick = onClick)
         .padding(horizontal = if (small) 14.dp else 22.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
         if (icon != null) Icon(icon, null, Modifier.size(if (small) 14.dp else 18.dp), tint = fg)
