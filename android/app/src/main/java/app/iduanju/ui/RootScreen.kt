@@ -1,32 +1,27 @@
 package app.iduanju.ui
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavType
@@ -40,13 +35,10 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import app.iduanju.ui.category.CategoryScreen
 import app.iduanju.ui.components.BHomeBackdrop
-import app.iduanju.ui.components.GlassNavigationRail
-import app.iduanju.ui.components.GlassStyle
-import app.iduanju.ui.components.GlassStylePref
 import app.iduanju.ui.components.LayoutMetrics
 import app.iduanju.ui.components.LocalLayoutMetrics
 import app.iduanju.ui.components.LocalRootBackdrop
-import app.iduanju.ui.components.glassPill
+import app.iduanju.ui.components.pressClick
 import app.iduanju.ui.components.glassSurface
 import app.iduanju.ui.detail.DetailScreen
 import app.iduanju.ui.home.HomeScreen
@@ -54,7 +46,7 @@ import app.iduanju.ui.player.PlayerScreen
 import app.iduanju.ui.profile.ProfileScreen
 import app.iduanju.ui.search.SearchScreen
 import app.iduanju.ui.theme.IdjThemeColors
-import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 /** Lets deep rows (继续观看 · 全部) open a route without threading callbacks through every page. */
 val LocalNavigate = androidx.compose.runtime.staticCompositionLocalOf<(String) -> Unit> { {} }
@@ -68,6 +60,9 @@ fun RootScreen(initialRoute: String? = null) {
     // LaunchedEffect(Unit) { updater.autoCheck() }
     var tab by remember { mutableIntStateOf(0) }
     var novelImmersive by remember { mutableStateOf(false) }
+    // tv.4: initial DPAD focus lands on the shell top bar's search capsule.
+    val shellSearchFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { shellSearchFocus.requestFocus() } }
     val back = nav.currentBackStackEntryAsState().value
     val route = back?.destination?.route ?: "home"
     LaunchedEffect(route) {
@@ -140,13 +135,24 @@ fun RootScreen(initialRoute: String? = null) {
             // Root backdrop is only active while the NavHost is recorded into it (chrome nav visible).
             LocalRootBackdrop provides (if (showChromeNav) backdrop else null),
         ) {
-            Row(Modifier.fillMaxSize()) {
-                if (showChromeNav && metrics.useRail) {
-                    GlassNavigationRail(
+            // tv.4: the left rail and bottom dock are gone — root navigation lives in one
+            // top row (TopNavBar) above a full-width NavHost. While the bar is shown it
+            // consumes the status-bar inset, so root pages' own statusBarsPadding() no-ops
+            // instead of double-padding; non-root routes keep the pre-tv.4 behaviour.
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .then(if (showChromeNav) Modifier.windowInsetsPadding(WindowInsets.statusBars) else Modifier),
+            ) {
+                if (showChromeNav) {
+                    TopNavBar(
                         selected = tab,
                         items = navItems,
                         onSelect = onSelectTab,
-                        backdrop = LocalRootBackdrop.current,
+                        onSearch = { nav.navigate("search") },
+                        backdrop = backdrop,
+                        searchFocus = shellSearchFocus,
+                        modifier = Modifier.padding(horizontal = 16.dp, top = 8.dp, bottom = 8.dp),
                     )
                 }
                 // NavHost content is drawn INSIDE layerBackdrop(backdrop): never hand it the root backdrop (feedback loop).
@@ -154,7 +160,7 @@ fun RootScreen(initialRoute: String? = null) {
                     NavHost(
                         nav,
                         startDestination = "home",
-                        modifier = Modifier.weight(1f).fillMaxHeight().then(if (showChromeNav) Modifier.layerBackdrop(backdrop) else Modifier),
+                        modifier = Modifier.weight(1f).fillMaxWidth().then(if (showChromeNav) Modifier.layerBackdrop(backdrop) else Modifier),
                     ) {
                         composable("home") {
                             HomeScreen(
@@ -300,173 +306,109 @@ fun RootScreen(initialRoute: String? = null) {
                 }
             }
         }
-        if (showChromeNav && !metrics.useRail) androidx.compose.animation.AnimatedVisibility(
-            visible = true,
-            modifier = Modifier.align(Alignment.BottomCenter),
-            enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)) +
-                androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(220)) { it / 2 },
-            exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(140)) +
-                androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(180)) { it / 2 },
-        ) {
-            SwipeableGlassTabBar(
-                selected = tab,
-                items = navItems,
-                onSelect = onSelectTab,
-                backdrop = backdrop,
-                modifier = Modifier
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(bottom = 6.dp),
-            )
-        }
         app.iduanju.update.UpdateDialog(updater)
         app.iduanju.ui.components.SiteVerifyHostOverlay()
     }
 }
 
-private val DockPillShape = RoundedCornerShape(percent = 50)
+
+private val TopBarShape = RoundedCornerShape(percent = 50)
 
 /**
- * Symmetrical floating bottom Liquid Glass dock (`首页 · TVBox · 找剧 · 我的`)
- * with horizontal finger-slide tab scrubbing, sliding glass indicator pill, and haptic ticks.
+ * tv.4 root chrome: ONE glass row at the top of the window — brand mark, the four root
+ * navigation capsules (首页 / TVBox / 找剧 / 我的), a search capsule and a live clock.
+ * Replaces both the left [GlassNavigationRail] and the bottom swipeable dock.
+ *
+ * The selected root capsule reads denser than the home page's channel capsules
+ * (white 28 % fill + white 60 % rim + extra-bold label vs. their 22 % / 55 %), so the
+ * two capsule rows stay visually distinct. The search capsule carries the initial
+ * DPAD focus (handed over from the old home header).
  */
 @Composable
-private fun SwipeableGlassTabBar(
+private fun TopNavBar(
     selected: Int,
     items: List<Pair<String, @Composable (Boolean) -> Unit>>,
     onSelect: (Int) -> Unit,
-    backdrop: Backdrop? = null,
+    onSearch: () -> Unit,
+    backdrop: Backdrop?,
+    searchFocus: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
     val c = IdjThemeColors
-    val liquid = GlassStylePref.style == GlassStyle.LIQUID
-    val haptic = LocalHapticFeedback.current
-
-    var isDragging by remember { mutableStateOf(false) }
-    var dragFraction by remember { mutableFloatStateOf(selected.toFloat()) }
-    var hoveredIdx by remember { mutableIntStateOf(selected) }
-    val latestSelected by rememberUpdatedState(selected)
-    val latestOnSelect by rememberUpdatedState(onSelect)
-
-    LaunchedEffect(selected) {
-        if (!isDragging) {
-            dragFraction = selected.toFloat()
-            hoveredIdx = selected
-        }
-    }
-
-    val activeTab = if (isDragging) hoveredIdx else selected
-    val indicatorFraction by animateFloatAsState(
-        targetValue = if (isDragging) dragFraction else selected.toFloat(),
-        animationSpec = if (isDragging) snap() else spring(dampingRatio = 0.78f, stiffness = 420f),
-        label = "dockIndicator",
-    )
-    val indicatorScale by animateFloatAsState(
-        targetValue = if (isDragging) 1.04f else 1f,
-        animationSpec = spring(dampingRatio = 0.72f, stiffness = 480f),
-        label = "dockIndicatorScale",
-    )
-
-    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .widthIn(max = 380.dp)
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .height(58.dp)
-                .glassSurface(shape = DockPillShape, backdrop = backdrop, shadowRadius = 18.dp)
-                .padding(5.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            BoxWithConstraints(
-                Modifier.fillMaxSize(),
-                contentAlignment = Alignment.CenterStart,
+    var clockMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { clockMs = System.currentTimeMillis(); delay(20_000) } }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .glassSurface(TopBarShape, backdrop = backdrop, shadowRadius = 0.dp, fallbackAlpha = if (c.dark) 0.60f else 0.80f)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // brand: play-in-circle + 汇看 wordmark (the mark the home header carried until tv.3)
+        Row(Modifier.padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(32.dp).border(2.dp, if (c.dark) Color.White else c.text, CircleShape),
+                contentAlignment = Alignment.Center,
             ) {
-                val count = items.size.coerceAtLeast(1)
-                val slotWidth = maxWidth / count
-                val slotWidthPx = with(LocalDensity.current) { slotWidth.toPx() }.coerceAtLeast(1f)
-                val maxIdx = (count - 1).toFloat()
-
-                Box(
-                    Modifier
-                        .offset {
-                            IntOffset((indicatorFraction.coerceIn(0f, maxIdx) * slotWidthPx).roundToInt(), 0)
-                        }
-                        .width(slotWidth)
-                        .height(48.dp)
-                        .graphicsLayer {
-                            scaleX = indicatorScale
-                            scaleY = indicatorScale
-                        }
-                        .then(
-                            if (liquid) Modifier.glassPill(DockPillShape, selected = true, neutralSelected = true)
-                            else Modifier.clip(DockPillShape).background(if (c.dark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.08f)),
-                        ),
-                )
-
+                Icon(Icons.Filled.PlayArrow, null, tint = if (c.dark) Color.White else c.text, modifier = Modifier.size(18.dp).offset(x = 1.dp))
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("汇看", color = c.text, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+        }
+        Spacer(Modifier.width(16.dp))
+        // root navigation capsules
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            items.forEachIndexed { i, (label, icon) ->
+                val on = i == selected
+                val fill = when {
+                    c.dark && on -> Color.White.copy(0.28f)
+                    c.dark -> Color.White.copy(0.07f)
+                    on -> c.text
+                    else -> c.glass
+                }
+                val line = when {
+                    c.dark && on -> Color.White.copy(0.60f)
+                    c.dark -> Color.White.copy(0.10f)
+                    else -> Color.Transparent
+                }
+                val fg = when {
+                    c.dark -> Color.White
+                    on -> c.bg
+                    else -> c.text
+                }
                 Row(
-                    Modifier
-                        .fillMaxSize()
-                        .pointerInput(count, slotWidthPx) {
-                            if (count <= 1) return@pointerInput
-                            detectHorizontalDragGestures(
-                                onDragStart = { startOffset ->
-                                    isDragging = true
-                                    val idx = (startOffset.x / slotWidthPx).toInt().coerceIn(0, count - 1)
-                                    dragFraction = (startOffset.x / slotWidthPx - 0.5f).coerceIn(0f, maxIdx)
-                                    if (idx != hoveredIdx) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    }
-                                    hoveredIdx = idx
-                                },
-                                onHorizontalDrag = { change, _ ->
-                                    change.consume()
-                                    val x = change.position.x
-                                    dragFraction = (x / slotWidthPx - 0.5f).coerceIn(0f, maxIdx)
-                                    val idx = (x / slotWidthPx).toInt().coerceIn(0, count - 1)
-                                    if (idx != hoveredIdx) {
-                                        hoveredIdx = idx
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    }
-                                },
-                                onDragEnd = {
-                                    val target = hoveredIdx
-                                    isDragging = false
-                                    if (target != latestSelected) latestOnSelect(target)
-                                },
-                                onDragCancel = {
-                                    isDragging = false
-                                    hoveredIdx = latestSelected
-                                    dragFraction = latestSelected.toFloat()
-                                },
-                            )
-                        },
+                    Modifier.height(40.dp).clip(CircleShape).background(fill).border(1.dp, line, CircleShape)
+                        .pressClick(0.97f, label = label, ring = CircleShape, ringColor = if (c.dark) Color.White else null) { onSelect(i) }
+                        .padding(horizontal = 15.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    items.forEachIndexed { i, (label, icon) ->
-                        val on = i == activeTab
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .clip(DockPillShape)
-                                .clickable { latestOnSelect(i) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                icon(on)
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    label,
-                                    color = if (on) c.text else c.secondary,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    }
+                    icon(on)
+                    Spacer(Modifier.width(6.dp))
+                    Text(label, color = fg, fontSize = 15.sp, fontWeight = if (on) FontWeight.ExtraBold else FontWeight.Normal, maxLines = 1)
                 }
             }
         }
+        Spacer(Modifier.width(14.dp))
+        // search capsule: takes the remaining width, initial DPAD focus target
+        Row(
+            Modifier.weight(1f).height(40.dp).clip(CircleShape)
+                .background(if (c.dark) Color.White.copy(0.08f) else c.glass)
+                .border(1.dp, if (c.dark) Color.White.copy(0.12f) else c.hairline, CircleShape)
+                .focusRequester(searchFocus)
+                .pressClick(label = "搜索", ring = CircleShape, ringColor = if (c.dark) Color.White else null) { onSearch() }
+                .padding(start = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Search, null, tint = c.secondary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("搜索你想看的作品", color = c.secondary, fontSize = 15.sp, maxLines = 1)
+        }
+        // live clock, as in the B mock's top-right corner
+        Text(
+            remember(clockMs) { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(clockMs)) },
+            color = c.text, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            modifier = Modifier.padding(start = 14.dp, end = 6.dp),
+        )
     }
 }

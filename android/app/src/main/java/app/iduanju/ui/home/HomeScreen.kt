@@ -27,19 +27,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
@@ -168,9 +164,7 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
     LaunchedEffect(pager.currentPage) { feedScroll = 0f }
     val density = androidx.compose.ui.platform.LocalDensity.current
     val pinned by remember(density) { derivedStateOf { feedScroll > with(density) { 8.dp.toPx() } } }
-    // TV build: land initial DPAD focus on the search capsule.
-    val searchFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
+    // tv.4: initial DPAD focus is owned by the shell TopNavBar's search capsule.
     // Remote hint pill auto-hides a few seconds after the home screen appears, so the
     // overlay never sits on top of shelf content (tv.2 complaint).
     var hintVisible by remember { mutableStateOf(true) }
@@ -190,53 +184,10 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
             if (c.dark) BHomeBackdrop() else AmbientGlow(visible = !pinned)
         }
         Column(Modifier.fillMaxSize().then(if (immersive) Modifier else Modifier.statusBarsPadding())) {
-            // header: B-style glass bar — brand + search capsule + filter + clock
+            // tv.4: the B-style brand bar (brand + search + 筛选 + clock) moved up into the
+            // shell TopNavBar; the header here is just the channel capsule row. 筛选 stays
+            // reachable: the channel bar's chevron opens the same ChannelSheet it fed.
             if (!immersive) Column(Modifier.dsPinned(pinned).padding(top = 8.dp)) {
-                Row(
-                    Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(58.dp)
-                        // same glass material as the dock / detail chrome (follows 我的 → 玻璃质感)
-                        .glassSurface(RoundedCornerShape(50), backdrop = homeBackdrop, shadowRadius = 0.dp, fallbackAlpha = if (c.dark) 0.60f else 0.80f),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // brand: play-in-circle + 汇看 wordmark (matches the app icon / B mock)
-                    Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(34.dp).border(2.dp, if (c.dark) Color.White else c.text, CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.PlayArrow, null, tint = if (c.dark) Color.White else c.text, modifier = Modifier.size(19.dp).offset(x = 1.dp))
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Text("汇看", color = c.text, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
-                    }
-                    Spacer(Modifier.width(18.dp))
-                    Row(Modifier.weight(1f).height(40.dp).clip(CircleShape)
-                        .background(if (c.dark) Color.White.copy(0.08f) else c.glass)
-                        .border(1.dp, if (c.dark) Color.White.copy(0.12f) else c.hairline, CircleShape)
-                        .focusRequester(searchFocus).pressClick(label = "home.search", ring = CircleShape, ringColor = if (c.dark) Color.White else null) { onSearch() }
-                        .padding(start = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Search, null, tint = c.secondary, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("搜索你想看的作品", color = c.secondary, fontSize = 15.sp, maxLines = 1)
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Row(Modifier.height(40.dp).clip(CircleShape)
-                        .background(if (c.dark) Color.White.copy(0.08f) else c.glass)
-                        .border(1.dp, if (c.dark) Color.White.copy(0.12f) else c.hairline, CircleShape)
-                        .pressClick(label = "筛选", ring = CircleShape, ringColor = if (c.dark) Color.White else null) { HomeChannelSheetOpen.value = true }
-                        .padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.FilterList, null, tint = c.text, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("筛选", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    }
-                    // live clock, as in the B mock's top-right corner
-                    var clockMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-                    LaunchedEffect(Unit) { while (true) { clockMs = System.currentTimeMillis(); delay(20_000) } }
-                    Text(
-                        remember(clockMs) { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(clockMs)) },
-                        color = c.text, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                        modifier = Modifier.padding(start = 14.dp, end = 16.dp),
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
                 var sheet by HomeChannelSheetOpen
                 ChannelBar(labels, pager.currentPage, c.text, onMore = { sheet = true }) { scope.launch { pager.animateScrollToPage(it) } }
                 if (sheet) ChannelSheet(pages, labels, pager.currentPage, onDismiss = { sheet = false }) { page, sub ->
