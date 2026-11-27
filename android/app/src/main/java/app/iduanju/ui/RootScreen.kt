@@ -152,7 +152,7 @@ fun RootScreen(initialRoute: String? = null) {
                         onSearch = { nav.navigate("search") },
                         backdrop = backdrop,
                         searchFocus = shellSearchFocus,
-                        modifier = Modifier.padding(horizontal = 16.dp, top = 8.dp, bottom = 8.dp),
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                     )
                 }
                 // NavHost content is drawn INSIDE layerBackdrop(backdrop): never hand it the root backdrop (feedback loop).
