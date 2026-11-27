@@ -173,13 +173,13 @@ fun Hairline(modifier: Modifier = Modifier) = Box(modifier.fillMaxWidth().height
  * slightly and draws an accent ring ([ring] should match the element's own clip shape), so every
  * pressClick target is remote-navigable with a visible focus state.
  */
-fun Modifier.pressClick(scale: Float = 0.96f, enabled: Boolean = true, label: String? = null, ring: Shape = RoundedCornerShape(14.dp), onClick: () -> Unit): Modifier = composed {
+fun Modifier.pressClick(scale: Float = 0.96f, enabled: Boolean = true, label: String? = null, ring: Shape = RoundedCornerShape(14.dp), ringColor: Color? = null, focusScale: Float = 1.06f, onClick: () -> Unit): Modifier = composed {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val focused by src.collectIsFocusedAsState()
-    val s by animateFloatAsState(if (pressed) scale else if (focused) 1.06f else 1f, DS.press(), label = "press")
+    val s by animateFloatAsState(if (pressed) scale else if (focused) focusScale else 1f, DS.press(), label = "press")
     this.graphicsLayer { scaleX = s; scaleY = s; alpha = if (pressed) 0.85f else 1f }
-        .then(if (focused) Modifier.border(2.5.dp, IdjThemeColors.accent, ring) else Modifier)
+        .then(if (focused) Modifier.border(2.5.dp, ringColor ?: IdjThemeColors.accent, ring) else Modifier)
         .clickable(src, null, enabled = enabled, onClick = onClick)
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
 }
