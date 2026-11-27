@@ -5,7 +5,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import app.iduanju.ui.components.*
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -40,7 +43,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -169,6 +171,10 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
     // TV build: land initial DPAD focus on the search capsule.
     val searchFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
+    // Remote hint pill auto-hides a few seconds after the home screen appears, so the
+    // overlay never sits on top of shelf content (tv.2 complaint).
+    var hintVisible by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) { delay(5_000); hintVisible = false }
 
     // Local backdrop of what sits behind the header: page colour + ambient glow. The header is a sibling drawn on top
     // of this layer, so its search capsule gets real drawBackdrop lens refraction (LIQUID) / blur (FROSTED). The
@@ -181,7 +187,7 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
     Box(Modifier.fillMaxSize().background(c.bg)) {
         Box(Modifier.fillMaxSize().layerBackdrop(homeBackdrop)) {
             // B-style home: deep blue-violet gradient + bokeh spots replace the warm glow (dark theme only).
-            if (c.dark) BStyleBackdrop() else AmbientGlow(visible = !pinned)
+            if (c.dark) BHomeBackdrop() else AmbientGlow(visible = !pinned)
         }
         Column(Modifier.fillMaxSize().then(if (immersive) Modifier else Modifier.statusBarsPadding())) {
             // header: B-style glass bar — brand + search capsule + filter + clock
@@ -280,40 +286,20 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
             }
         }
         // B-style remote hint pill (rail layouts only; decorative, never focusable).
-        if (!immersive && LocalLayoutMetrics.current.useRail) {
-            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)
+        // tv.3: fades out after a few seconds instead of permanently overlaying the last shelf row.
+        AnimatedVisibility(
+            visible = hintVisible && !immersive && LocalLayoutMetrics.current.useRail,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Box(Modifier.padding(bottom = 16.dp)
                 .glassSurface(CircleShape, backdrop = homeBackdrop, shadowRadius = 8.dp, fallbackAlpha = 0.6f)
                 .padding(horizontal = 18.dp, vertical = 8.dp)) {
                 Text("方向键选择 · OK 打开 · 返回 上一页", color = c.secondary, fontSize = 12.sp, maxLines = 1)
             }
         }
     }
-}
-
-/**
- * B-style home ground: deep blue-violet gradient with soft bokeh spots.
- * Radial-gradient brushes only — no runtime blur, so it stays cheap on Android 9 TVs.
- */
-@Composable
-private fun BStyleBackdrop() {
-    Box(Modifier.fillMaxSize().drawBehind {
-        drawRect(
-            Brush.verticalGradient(
-                0f to Color(0xFF0A0E2A), 0.45f to Color(0xFF1C1446), 0.75f to Color(0xFF120E33), 1f to Color(0xFF070818),
-            ),
-        )
-        val spots = listOf(
-            Triple(Offset(size.width * 0.06f, size.height * 0.02f), 190.dp.toPx(), Color(0xFF7B4DFF).copy(alpha = 0.20f)),
-            Triple(Offset(size.width * 0.92f, size.height * 0.00f), 230.dp.toPx(), Color(0xFF3D6BFF).copy(alpha = 0.16f)),
-            Triple(Offset(size.width * 0.02f, size.height * 0.55f), 150.dp.toPx(), Color(0xFFC44DFF).copy(alpha = 0.12f)),
-            Triple(Offset(size.width * 0.97f, size.height * 0.78f), 260.dp.toPx(), Color(0xFF5A3DFF).copy(alpha = 0.14f)),
-            Triple(Offset(size.width * 0.55f, size.height * 1.02f), 200.dp.toPx(), Color(0xFF2E9BFF).copy(alpha = 0.08f)),
-            Triple(Offset(size.width * 0.30f, size.height * 0.30f), 110.dp.toPx(), Color(0xFF8A5CFF).copy(alpha = 0.08f)),
-        )
-        for ((center, radius, color) in spots) {
-            drawCircle(Brush.radialGradient(listOf(color, Color.Transparent), center = center, radius = radius), radius = radius, center = center)
-        }
-    })
 }
 
 /**

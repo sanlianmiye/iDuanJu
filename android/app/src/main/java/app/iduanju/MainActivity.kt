@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
             app.iduanju.ui.UiEvidence.switchEpisode=intent?.getBooleanExtra("qaSwitch",false) ?: false
         }
         setContent {
-            IdjTheme {
+            IdjTheme(dark = true) {
                 Surface(Modifier.fillMaxSize(), color = IdjThemeColors.bg) {
                     RootScreen(initialRoute = intent?.getStringExtra("route"))
                 }

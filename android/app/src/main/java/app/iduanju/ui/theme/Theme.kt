@@ -1,6 +1,5 @@
 package app.iduanju.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -128,9 +127,13 @@ private val Light = IdjColors(
 
 val LocalIdjColors = staticCompositionLocalOf { Dark }
 
-/** The player, image viewer and readers stay dark: wrap them in `IdjTheme(dark = true)`. */
+/**
+ * TV build: dark is pinned — the app no longer follows the system theme, so the B-style
+ * dark UI (deep blue-violet home) renders identically on light-system TVs. Callers may
+ * still pass [dark] explicitly (player/readers already pass true); there is no light mode.
+ */
 @Composable
-fun IdjTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun IdjTheme(dark: Boolean = true, content: @Composable () -> Unit) {
     val colors = if (dark) Dark else Light
     val scheme = if (dark) darkColorScheme(
         primary = colors.accent, onPrimary = colors.onAccent, background = colors.bg,

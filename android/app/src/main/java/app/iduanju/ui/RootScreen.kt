@@ -39,6 +39,7 @@ import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import app.iduanju.ui.category.CategoryScreen
+import app.iduanju.ui.components.BHomeBackdrop
 import app.iduanju.ui.components.GlassNavigationRail
 import app.iduanju.ui.components.GlassStyle
 import app.iduanju.ui.components.GlassStylePref
@@ -129,6 +130,10 @@ fun RootScreen(initialRoute: String? = null) {
                 goHome()
             } else nav.navigate(r)
         }
+        // tv.3: on the home route the B-style ground spans the full window — including the
+        // strip behind the floating glass rail — so the rail reads as glass over the same
+        // blue-violet surface instead of sitting on a flat sidebar column.
+        if (route == "home") BHomeBackdrop()
         androidx.compose.runtime.CompositionLocalProvider(
             LocalNavigate provides navigate,
             LocalLayoutMetrics provides metrics,
